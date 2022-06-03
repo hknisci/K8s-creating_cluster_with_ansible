@@ -1,0 +1,223 @@
+- name: Create the Kubernetes cluster 
+  hosts: control_plane 
+  remote_user: admin-h.isci@odeabank.com.tr
+  become: yes
+  gather_facts: True
+  tasks:
+    - name: Turning off swap 
+      command: swapoff -a 
+      changed_when: true
+      when: ansible_swaptotal_mb > 0
+       
+    - name: Disabling swap  
+      lineinfile:
+        path: '/etc/fstab'
+        regexp: '\sswap\s'
+        state: absent 
+
+    - name: Putting SELinux in permissive mode, logging actions that would be blocked.
+      selinux:
+        policy: targeted
+        state: permissive
+
+    - name: Disabling firewalld 
+      systemd:
+        name: firewalld
+        state: stopped
+        enabled: no
+
+    - name: Load the required kernel modules 
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      with_items:
+        - br_netfilter
+        - overlay
+
+    - name: Persist kernel module loading  
+      copy:
+        dest: '/etc/modules-load.d/k8s.conf' 
+        content: |
+          br_netfilter
+          overlay
+
+    - name: Tune sysctl parameters  in /proc and the sysctl file
+      sysctl:
+        name: "{{ item }}" 
+        value: '1'
+        sysctl_set: yes
+        state: present
+      with_items:
+        - net.ipv4.ip_forward
+        - net.bridge.bridge-nf-call-iptables
+        - net.bridge.bridge-nf-call-ip6tables
+
+    - name: Add Kubernetes repository 
+      yum_repository:
+        baseurl: https://packages.cloud.google.com/yum/repos/kubernetes-el7-$basearch
+        name: "Kubernetes"
+        state: present 
+        description: "Kubernetes Repository"
+        gpgcheck: yes
+        gpgkey: "https://packages.cloud.google.com/yum/doc/yum-key.gpg https://packages.cloud.google.com/yum/doc/rpm-package-key.gpg" 
+        exclude: "kubelet kubeadm kubectl"
+
+    - name: Add docker-ce repository for containerd 
+      yum_repository:
+        name: "Docker-CE" 
+        description: "Docker CE Stable" 
+        baseurl: https://download.docker.com/linux/centos/$releasever/$basearch/stable 
+        state: present
+        gpgcheck: yes
+        gpgkey: https://download.docker.com/linux/centos/gpg 
+        
+    - name: Install required packages (containerd, kubeadmn, kubectl, kubelet) 
+      yum:
+        name: "{{ packages }}"
+        disable_excludes: "Kubernetes"
+      vars:
+        packages:
+        - containerd.io
+        - kubeadm
+        - kubelet
+        - kubectl
+        - iproute-tc
+
+    - name: Dump default configuration for containerd
+      shell: containerd config default > /etc/containerd/config.toml
+
+    - name: Configure crictl to use containerd
+      copy:
+        src: files/crictl.yaml 
+        dest: /etc/crictl.yaml
+
+    - name: Enable and start the required services (containerd.io, kubelet) 
+      systemd:
+        name: "{{ item }}" 
+        enabled: yes
+        state: started
+      with_items:
+        - containerd
+        - kubelet
+    - name: Include variables
+      include_vars: dir=vars
+
+    - name: Initialize the Kubernetes Cluster
+      command: kubeadm init --pod-network-cidr "{{ pod_network }}" 
+      register: kubeadm_init
+    - name: Create .kube directory
+      file:
+        path: /root/.kube
+        state: directory
+
+    - name: Copy kubernetes config file for kubectl
+      copy:
+        src: /etc/kubernetes/admin.conf
+        remote_src: yes
+        dest: /root/.kube/config
+
+    - name: Include variables
+      include_vars: dir=vars
+
+    - name: Install the Tigera Operator 
+      command: kubectl create -f https://docs.projectcalico.org/manifests/tigera-operator.yaml 
+      register: tigera_operator_install
+      failed_when: tigera_operator_install.rc != 0
+
+    - name: Copy calico manifest file
+      copy:
+        src: "{{ playbook_dir }}/files/calico-base.yaml" 
+        dest: /root/calico-base.yaml
+
+    - name: Set pod network CIDR in Calico manifest 
+      replace:
+        path: /root/calico-base.yaml 
+        regexp: 'POD_NETWORK'
+        replace: "{{ pod_network }}"
+
+    - name: Install Calico 
+      command: kubectl create -f /root/calico-base.yaml 
+      register: calico_install
+      failed_when: calico_install.rc != 0
+    - name: Create bootstrap token with kubeadm {{ ansible_facts['nodename'] }}
+      command: kubeadm token create --print-join-command 
+      register: kubeadm_join_command 
+
+    - name: Generate kubeadm join command
+      add_host:
+        name: "kubeadm"
+        join_command: "{{ kubeadm_join_command.stdout }}"
+- name: Join nodes to the Kubernetes cluster 
+  hosts: master_workers 
+  remote_user: admin-h.isci@odeabank.com.tr
+  become: yes
+  gather_facts: True
+  tasks:
+    - include: node-playbook.yaml
+- name: Prepare Kubernetes control plane for Flannel
+  hosts: control_plane
+  remote_user: admin-h.isci@odeabank.com.tr
+  become: yes
+  gather_facts: True
+  tasks:
+    - name: Enable bridged IPv4 traffic to iptables chains
+      sysctl:
+        name: "{{ item }}" 
+        value: '1'
+        sysctl_set: yes
+        state: present
+      with_items:
+        - net.bridge.bridge-nf-call-iptables
+    - name: Download Flannel for Linux
+      get_url:
+        url: https://raw.githubusercontent.com/coreos/flannel/master/Documentation/kube-flannel.yml
+        dest: /root/kube-flannel.yml
+        force_basic_auth: yes
+    - name: Download Configure Flannel for Linux  
+      lineinfile:
+        path: '/root/kube-flannel.yml'
+        regexp: '\sswap\s'
+        state: absent
+    - name: Replace between the expressions
+      ansible.builtin.replace:
+        path: /root/kube-flannel.yml
+        after: '  net-conf.json: |'
+        before: 'apiVersion: apps/v1'
+        regexp: '^(.+)$'
+        replace: '#
+			{
+			  "Network": "10.244.0.0/16",
+			  "Backend": {
+				"Type": "host-gw"
+			  }
+			}
+		---
+		\1'
+    - name: kubectl apply kube-flannel 
+      command: kubectl apply -f kube-flannel.yml 
+      register: kubectl_apply_kube_flannel
+      failed_when: kubectl_apply_kube_flannel.rc != 0
+    - name: Add kube-proxy DaemonSets
+      shell: curl -L https://github.com/kubernetes-sigs/sig-windows-tools/releases/latest/download/kube-proxy.yml | sed 's/VERSION/v1.23.0/g' | kubectl apply -f -
+      register: kubectl_apply_kube_proxy
+      args:
+        warn: false
+    - name: Add Windows host-gw
+      shell: curl -L https://github.com/kubernetes-sigs/sig-windows-tools/releases/latest/download/flannel-host-gw.yml | sed 's/Ethernet/Ethernet0 2/g' | kubectl apply -f -
+      register: kubectl_apply_flannel_host_gw
+      args:
+        warn: false
+    - name: Create bootstrap token with kubeadm {{ ansible_facts['nodename'] }}
+      command: kubeadm token create --print-join-command 
+      register: kubeadm_join_command 
+    - name: Installing winrm
+      shell: pip3 install "pywinrm>=0.2.2"
+    - name: Generate kubeadm join command
+      add_host:
+        name: "kubeadm"
+        join_command: "{{ kubeadm_join_command.stdout }}" 
+#- name: Join nodes to the Kubernetes cluster 
+#  hosts: windows-node 
+#  become: false
+#  tasks:
+#    - include: windows-node-playbook.yaml

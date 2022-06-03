@@ -1,0 +1,64 @@
+- name: Install all security, critical, and rollup updates
+  win_updates:
+    category_names:
+      - SecurityUpdates
+      - CriticalUpdates
+      - UpdateRollups
+    reboot: yes
+    #reboot_timeout: 60
+
+- name: Check if Containers are already installed as Windows Feature
+  win_shell: Get-WindowsOptionalFeature -Online -FeatureName Containers | Where State -CContains "Enabled"
+  register: check_feature_container_installed
+
+- name: Install Containers natively as Windows Feature (only, if not already installed)   
+  win_shell: Enable-WindowsOptionalFeature -Online -FeatureName containers -All -NoRestart
+  when: check_feature_container_installed.stdout == ''
+  ignore_errors: yes
+  register: feature_container_installation   
+
+- name: Checking if Docker Windows Service is already configured (to always ensure a fresh Windows Docker installation)
+  win_service:
+    name: docker
+  register: docker_service_info
+  ignore_errors: yes
+
+- name: Install (or upgrade) Docker via chocolatey
+  win_chocolatey:
+    name: docker
+    state: latest
+- name: Register Docker as a Windows Service
+  win_shell: "C:\\ProgramData\\chocolatey\\lib\\docker\\tools\\docker\\dockerd.exe --register-service"
+  ignore_errors: yes
+- name: Start Docker as Windows Service
+  win_service:
+    name: docker
+    state: started
+- name: Pull the small Windows Docker Base Image microsoft/nanoserver from hub.docker.com
+  win_shell: docker pull microsoft/nanoserver
+- name: Pull the small Windows Docker Base Image microsoft/nanoserver with tag 1709 from hub.docker.com
+  win_shell: docker pull microsoft/nanoserver:1709
+  when: windows_version == "1709"
+- name: Pull the small Windows Docker Base Image microsoft/nanoserver with tag 1803 from hub.docker.com
+  win_shell: docker pull microsoft/nanoserver:1803
+  when: windows_version == "1803"
+- name: Install (or upgrade) Docker Compose via chocolatey
+  win_chocolatey:
+    name: docker-compose
+    state: latest
+- name: x1
+  win_shell: Install-WindowsFeature -Name containers  
+- name: Installing Containerd
+  win_shell: curl.exe -LO https://github.com/kubernetes-sigs/sig-windows-tools/releases/latest/download/Install-Containerd.ps1
+
+- name: Installing Containerd_2
+  win_shell: .\Install-Containerd.ps1 -netAdapterName "Ethernet0 2"
+- name: Installing Kubeadm Kubectl
+  win_shell: curl.exe -LO https://raw.githubusercontent.com/kubernetes-sigs/sig-windows-tools/master/kubeadm/scripts/PrepareNode.ps1
+  register: check_feature_hyperv_installed
+- name: Installing Kubeadm Kubectl 2
+  win_shell: .\PrepareNode.ps1 -KubernetesVersion v1.23.0
+  register: check_feature_hyperv_installed
+- name: Join {{ ansible_facts['nodename'] }} to the k8s cluster
+  win_shell: "{{ hostvars['kubeadm']['join_command'] }}"
+
