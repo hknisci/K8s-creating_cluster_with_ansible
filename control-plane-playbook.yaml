@@ -1,6 +1,6 @@
 - name: Create the Kubernetes cluster 
   hosts: control_plane 
-  remote_user: admin-h.isci@odeabank.com.tr
+  remote_user: exampleuser
   become: yes
   gather_facts: True
   tasks:
@@ -149,14 +149,14 @@
         join_command: "{{ kubeadm_join_command.stdout }}"
 - name: Join nodes to the Kubernetes cluster 
   hosts: master_workers 
-  remote_user: admin-h.isci@odeabank.com.tr
+  remote_user: exampleuser
   become: yes
   gather_facts: True
   tasks:
     - include: node-playbook.yaml
 - name: Prepare Kubernetes control plane for Flannel
   hosts: control_plane
-  remote_user: admin-h.isci@odeabank.com.tr
+  remote_user: exampleuser
   become: yes
   gather_facts: True
   tasks:
@@ -216,8 +216,8 @@
       add_host:
         name: "kubeadm"
         join_command: "{{ kubeadm_join_command.stdout }}" 
-#- name: Join nodes to the Kubernetes cluster 
-#  hosts: windows-node 
-#  become: false
-#  tasks:
-#    - include: windows-node-playbook.yaml
+- name: Join nodes to the Kubernetes cluster 
+  hosts: windows-node 
+  become: false
+  tasks:
+    - include: windows-node-playbook.yaml
