@@ -1,0 +1,54 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-notifications-cm
+  namespace: argocd
+data:
+  service.slack: |
+    token: $slack-token
+
+  template.app-deployed: |
+    message: |
+      :white_check_mark: *{{.app.metadata.name}}* successfully synced!
+      *Environment:* {{index .app.metadata.labels "environment"}}
+      *Revision:* {{.app.status.sync.revision}}
+      *Deployed at:* {{.app.status.operationState.finishedAt}}
+
+  template.app-health-degraded: |
+    message: |
+      :red_circle: *{{.app.metadata.name}}* health degraded!
+      *Environment:* {{index .app.metadata.labels "environment"}}
+      *Health Status:* {{.app.status.health.status}}
+      *Message:* {{.app.status.health.message}}
+
+  template.app-sync-failed: |
+    message: |
+      :x: *{{.app.metadata.name}}* sync failed!
+      *Environment:* {{index .app.metadata.labels "environment"}}
+      *Error:* {{.app.status.operationState.message}}
+
+  trigger.on-deployed: |
+    - description: Notify when app is synced and healthy
+      send:
+        - app-deployed
+      when: app.status.operationState.phase in ['Succeeded'] and app.status.health.status == 'Healthy'
+
+  trigger.on-health-degraded: |
+    - description: Notify when app health degrades
+      send:
+        - app-health-degraded
+      when: app.status.health.status == 'Degraded'
+
+  trigger.on-sync-failed: |
+    - description: Notify when sync fails
+      send:
+        - app-sync-failed
+      when: app.status.operationState.phase in ['Error', 'Failed']
+
+  subscriptions: |
+    - recipients:
+        - slack:#deployments
+      triggers:
+        - on-deployed
+        - on-health-degraded
+        - on-sync-failed

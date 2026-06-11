@@ -1,0 +1,38 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-pod-probes
+  annotations:
+    policies.kyverno.io/title: Require Pod Probes
+    policies.kyverno.io/category: Best Practices
+    policies.kyverno.io/severity: medium
+    policies.kyverno.io/description: >-
+      Liveness and readiness probes must be defined for all containers
+      to ensure proper traffic routing and pod lifecycle management.
+spec:
+  validationFailureAction: Audit
+  background: true
+  rules:
+    - name: check-probes
+      match:
+        any:
+          - resources:
+              kinds:
+                - Pod
+              namespaceSelector:
+                matchExpressions:
+                  - key: environment
+                    operator: In
+                    values:
+                      - staging
+                      - prod
+      validate:
+        message: "Liveness and readiness probes are required for all containers in staging/prod."
+        pattern:
+          spec:
+            containers:
+              - name: "*"
+                livenessProbe:
+                  periodSeconds: "?*"
+                readinessProbe:
+                  periodSeconds: "?*"
