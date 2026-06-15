@@ -1,0 +1,9 @@
+# Namespaces where the webhook enforces resource requests
+# Add or remove namespaces here to control webhook scope
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: webhook-config
+  namespace: webhook-system
+data:
+  namespaces: "default,app,production,staging"

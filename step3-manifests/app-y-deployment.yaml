@@ -1,0 +1,32 @@
+# App Y: Batch — Burstable QoS (limits > requests)
+# Lower QoS class: first candidate for eviction under memory pressure
+# preemptionPolicy: Never means App Y won't preempt others but CAN be preempted
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-y
+  namespace: app
+  labels:
+    app: app-y
+    tier: batch
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: app-y
+  template:
+    metadata:
+      labels:
+        app: app-y
+    spec:
+      priorityClassName: low-priority-batch
+      containers:
+        - name: app-y
+          image: dreamgames/app-y:1.0.0
+          resources:
+            requests:
+              cpu: 100m        # low request → scheduler places flexibly
+              memory: 128Mi
+            limits:
+              cpu: 1000m       # can burst when resources free
+              memory: 512Mi

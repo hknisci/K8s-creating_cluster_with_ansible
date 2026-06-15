@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: k8s-overview-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  k8s-overview.json: |
+    {
+      "title": "Kubernetes Cluster Overview",
+      "uid": "k8s-overview",
+      "version": 1,
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "panels": [
+        {
+          "id": 1,
+          "title": "Pod Restarts (last 5m)",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+          "targets": [{
+            "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"app\"}[5m]))",
+            "legendFormat": "Restarts"
+          }],
+          "options": {
+            "colorMode": "background",
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 1},
+                {"color": "red", "value": 5}
+              ]
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Running Pods",
+          "type": "stat",
+          "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+          "targets": [{
+            "expr": "count(kube_pod_status_phase{phase=\"Running\", namespace=\"app\"})",
+            "legendFormat": "Pods"
+          }]
+        },
+        {
+          "id": 3,
+          "title": "CPU Usage by Pod",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+          "targets": [{
+            "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"app\", container!=\"\"}[5m]))",
+            "legendFormat": "{{pod}}"
+          }]
+        },
+        {
+          "id": 4,
+          "title": "Memory Usage by Pod",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+          "targets": [{
+            "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"app\", container!=\"\"})",
+            "legendFormat": "{{pod}}"
+          }]
+        },
+        {
+          "id": 5,
+          "title": "HTTP Request Rate",
+          "type": "timeseries",
+          "gridPos": {"h": 8, "w": 12, "x": 0, "y": 12},
+          "targets": [{
+            "expr": "sum(rate(app_echo_requests_total[5m]))",
+            "legendFormat": "Requests/s"
+          }]
+        },
+        {
+          "id": 6,
+          "title": "Node CPU Utilization",
+          "type": "gauge",
+          "gridPos": {"h": 8, "w": 12, "x": 12, "y": 12},
+          "targets": [{
+            "expr": "100 - (avg by (node) (rate(node_cpu_seconds_total{mode=\"idle\"}[2m])) * 100)",
+            "legendFormat": "{{node}}"
+          }],
+          "options": {
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": null},
+                {"color": "yellow", "value": 70},
+                {"color": "red", "value": 85}
+              ]
+            }
+          }
+        }
+      ]
+    }

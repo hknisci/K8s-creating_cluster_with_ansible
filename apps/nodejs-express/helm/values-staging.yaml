@@ -1,0 +1,46 @@
+replicaCount: 2
+
+image:
+  tag: "staging"
+  pullPolicy: IfNotPresent
+
+ingress:
+  hosts:
+    - host: app.staging.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: app-staging-tls-secret
+      hosts:
+        - app.staging.example.com
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 2
+  maxReplicas: 5
+
+pdb:
+  enabled: true
+  minAvailable: 1
+
+env:
+  NODE_ENV: staging
+  LOG_LEVEL: info
+
+externalSecret:
+  data:
+    - secretKey: DATABASE_URL
+      remoteRef:
+        key: nodejs-express-staging/database-url
+    - secretKey: API_KEY
+      remoteRef:
+        key: nodejs-express-staging/api-key

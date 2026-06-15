@@ -1,0 +1,26 @@
+# Persistent Volume on worker2 (Node 3) for Jenkins data
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins-pv
+  labels:
+    type: local
+    app: jenkins
+spec:
+  storageClassName: jenkins-local
+  capacity:
+    storage: 20Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                - worker2
+  hostPath:
+    path: /data/jenkins
+    type: DirectoryOrCreate

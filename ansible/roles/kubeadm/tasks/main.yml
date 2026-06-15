@@ -1,0 +1,35 @@
+---
+- name: Add Kubernetes GPG key
+  apt_key:
+    url: https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
+    state: present
+
+- name: Add Kubernetes repository
+  apt_repository:
+    repo: "deb https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+    state: present
+    filename: kubernetes
+
+- name: Install kubeadm, kubelet, kubectl
+  apt:
+    name:
+      - "kubeadm={{ kubernetes_version }}-1.1"
+      - "kubelet={{ kubernetes_version }}-1.1"
+      - "kubectl={{ kubernetes_version }}-1.1"
+    state: present
+    update_cache: true
+
+- name: Hold Kubernetes packages at current version
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop:
+    - kubeadm
+    - kubelet
+    - kubectl
+
+- name: Enable and start kubelet
+  systemd:
+    name: kubelet
+    enabled: true
+    state: started

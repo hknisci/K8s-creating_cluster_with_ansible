@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: resource-webhook
+  namespace: webhook-system
+  labels:
+    app: resource-webhook
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: resource-webhook
+  template:
+    metadata:
+      labels:
+        app: resource-webhook
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: "/metrics"
+        prometheus.io/port: "8443"
+        prometheus.io/scheme: "https"
+    spec:
+      serviceAccountName: resource-webhook
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: webhook
+          image: dreamgames/resource-webhook:1.0.0
+          ports:
+            - containerPort: 8443
+              name: https
+          env:
+            - name: WEBHOOK_NAMESPACES
+              valueFrom:
+                configMapKeyRef:
+                  name: webhook-config
+                  key: namespaces
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: [ALL]
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8443
+              scheme: HTTPS
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: tls-certs
+              mountPath: /etc/webhook/tls
+              readOnly: true
+      volumes:
+        - name: tls-certs
+          secret:
+            secretName: resource-webhook-tls

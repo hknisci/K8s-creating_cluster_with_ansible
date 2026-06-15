@@ -1,0 +1,307 @@
+# GitLab CI Pipeline - GCP/GKE Platform
+# Stages: validate → lint → security_scan → build → plan → apply
+
+default:
+  image: hashicorp/terraform:1.6
+  tags:
+    - docker
+  retry:
+    max: 2
+    when:
+      - runner_system_failure
+      - stuck_or_timeout_failure
+
+stages:
+  - validate
+  - lint
+  - security_scan
+  - build
+  - plan
+  - apply
+
+variables:
+  TF_IN_AUTOMATION: "true"
+  TF_CLI_ARGS: "-no-color"
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+  REGISTRY: europe-west1-docker.pkg.dev
+  IMAGE_NAME: nodejs-express/app
+
+# ─── Templates ────────────────────────────────────────────────────────────────
+
+.terraform_base:
+  before_script:
+    - terraform version
+    - cd ${TF_DIR}
+    - terraform init
+        -backend-config="bucket=${TF_STATE_BUCKET}"
+        -backend-config="prefix=${ENVIRONMENT}/terraform.tfstate"
+        -reconfigure
+
+.rules_mr:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+.rules_main:
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+
+.rules_mr_or_main:
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main" && $CI_PIPELINE_SOURCE == "push"'
+
+# ─── Validate Stage ────────────────────────────────────────────────────────────
+
+terraform:validate:dev:
+  extends:
+    - .terraform_base
+    - .rules_mr_or_main
+  stage: validate
+  variables:
+    TF_DIR: terraform/environments/dev
+    ENVIRONMENT: dev
+  script:
+    - terraform validate
+
+terraform:validate:staging:
+  extends:
+    - .terraform_base
+    - .rules_mr_or_main
+  stage: validate
+  variables:
+    TF_DIR: terraform/environments/staging
+    ENVIRONMENT: staging
+  script:
+    - terraform validate
+
+terraform:validate:prod:
+  extends:
+    - .terraform_base
+    - .rules_mr_or_main
+  stage: validate
+  variables:
+    TF_DIR: terraform/environments/prod
+    ENVIRONMENT: prod
+  script:
+    - terraform validate
+
+helm:validate:
+  image: alpine/helm:3.13.0
+  extends: .rules_mr_or_main
+  stage: validate
+  script:
+    - helm lint apps/nodejs-express/helm -f apps/nodejs-express/helm/values.yaml
+    - helm lint apps/nodejs-express/helm -f apps/nodejs-express/helm/values.yaml -f apps/nodejs-express/helm/values-dev.yaml
+    - helm lint apps/nodejs-express/helm -f apps/nodejs-express/helm/values.yaml -f apps/nodejs-express/helm/values-staging.yaml
+    - helm lint apps/nodejs-express/helm -f apps/nodejs-express/helm/values.yaml -f apps/nodejs-express/helm/values-prod.yaml
+    - helm template nodejs-express apps/nodejs-express/helm -f apps/nodejs-express/helm/values.yaml | kubectl apply --dry-run=client -f -
+  allow_failure: false
+
+# ─── Lint Stage ────────────────────────────────────────────────────────────────
+
+terraform:fmt:
+  extends: .rules_mr_or_main
+  stage: lint
+  script:
+    - terraform fmt -check -recursive terraform/
+  allow_failure: false
+
+tflint:
+  image:
+    name: ghcr.io/terraform-linters/tflint:v0.50.2
+    entrypoint: [""]
+  extends: .rules_mr_or_main
+  stage: lint
+  script:
+    - |
+      for dir in terraform/environments/dev terraform/environments/staging terraform/environments/prod; do
+        echo "Linting $dir"
+        tflint --chdir="$dir" --init
+        tflint --chdir="$dir"
+      done
+
+yaml:lint:
+  image: cytopia/yamllint:latest
+  extends: .rules_mr_or_main
+  stage: lint
+  script:
+    - yamllint -c .yamllint.yaml gitops/ apps/nodejs-express/helm/ policies/
+  allow_failure: true
+
+# ─── Security Scan Stage ────────────────────────────────────────────────────────
+
+trivy:terraform:
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  extends: .rules_mr_or_main
+  stage: security_scan
+  script:
+    - trivy config --exit-code 1 --severity HIGH,CRITICAL terraform/
+  allow_failure: false
+
+trivy:dockerfile:
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  extends: .rules_mr_or_main
+  stage: security_scan
+  script:
+    - trivy config --exit-code 0 --severity MEDIUM,HIGH,CRITICAL apps/nodejs-express/Dockerfile
+  allow_failure: true
+
+checkov:
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint: [""]
+  extends: .rules_mr_or_main
+  stage: security_scan
+  script:
+    - checkov -d terraform/ --framework terraform --output cli --soft-fail
+  allow_failure: true
+
+kyverno:test:
+  image: ghcr.io/kyverno/kyverno-cli:v1.11.0
+  extends: .rules_mr_or_main
+  stage: security_scan
+  script:
+    - kyverno test policies/kyverno/
+  allow_failure: true
+
+# ─── Build Stage ────────────────────────────────────────────────────────────────
+
+docker:build:push:
+  image: docker:24-dind
+  stage: build
+  services:
+    - docker:24-dind
+  extends: .rules_mr_or_main
+  variables:
+    IMAGE_TAG: "${CI_COMMIT_SHORT_SHA}"
+  before_script:
+    - docker login -u _json_key --password-stdin "https://${REGISTRY}" <<< "${GCP_SERVICE_ACCOUNT_KEY}"
+  script:
+    - |
+      FULL_IMAGE="${REGISTRY}/${GCP_PROJECT_ID}/${IMAGE_NAME}"
+      docker build
+        --label "git-commit=${CI_COMMIT_SHA}"
+        --label "pipeline-id=${CI_PIPELINE_ID}"
+        --cache-from "${FULL_IMAGE}:latest"
+        -t "${FULL_IMAGE}:${IMAGE_TAG}"
+        -t "${FULL_IMAGE}:latest"
+        apps/nodejs-express/
+      docker push "${FULL_IMAGE}:${IMAGE_TAG}"
+      docker push "${FULL_IMAGE}:latest"
+      echo "IMAGE_TAG=${IMAGE_TAG}" >> build.env
+  artifacts:
+    reports:
+      dotenv: build.env
+    expire_in: 1 week
+
+trivy:image:scan:
+  image:
+    name: aquasec/trivy:latest
+    entrypoint: [""]
+  stage: build
+  needs: [docker:build:push]
+  extends: .rules_mr_or_main
+  script:
+    - trivy image
+        --exit-code 1
+        --severity CRITICAL
+        --no-progress
+        "${REGISTRY}/${GCP_PROJECT_ID}/${IMAGE_NAME}:${IMAGE_TAG}"
+  allow_failure: false
+
+# ─── Plan Stage ────────────────────────────────────────────────────────────────
+
+.terraform_plan:
+  extends:
+    - .terraform_base
+    - .rules_mr_or_main
+  stage: plan
+  script:
+    - terraform plan -out=tfplan.binary -var-file="terraform.tfvars"
+    - terraform show -no-color tfplan.binary > tfplan.txt
+  artifacts:
+    name: "terraform-plan-${ENVIRONMENT}-${CI_COMMIT_SHORT_SHA}"
+    paths:
+      - ${TF_DIR}/tfplan.binary
+      - ${TF_DIR}/tfplan.txt
+    expire_in: 1 week
+    expose_as: "Terraform Plan - ${ENVIRONMENT}"
+
+terraform:plan:dev:
+  extends: .terraform_plan
+  variables:
+    TF_DIR: terraform/environments/dev
+    ENVIRONMENT: dev
+
+terraform:plan:staging:
+  extends: .terraform_plan
+  variables:
+    TF_DIR: terraform/environments/staging
+    ENVIRONMENT: staging
+
+terraform:plan:prod:
+  extends: .terraform_plan
+  variables:
+    TF_DIR: terraform/environments/prod
+    ENVIRONMENT: prod
+
+# ─── Apply Stage ────────────────────────────────────────────────────────────────
+
+terraform:apply:dev:
+  extends:
+    - .terraform_base
+    - .rules_main
+  stage: apply
+  needs: [terraform:plan:dev]
+  variables:
+    TF_DIR: terraform/environments/dev
+    ENVIRONMENT: dev
+  environment:
+    name: dev
+    action: start
+  script:
+    - terraform apply -auto-approve tfplan.binary
+  when: on_success
+
+terraform:apply:staging:
+  extends:
+    - .terraform_base
+    - .rules_main
+  stage: apply
+  needs: [terraform:plan:staging]
+  variables:
+    TF_DIR: terraform/environments/staging
+    ENVIRONMENT: staging
+  environment:
+    name: staging
+    action: start
+  script:
+    - terraform apply -auto-approve tfplan.binary
+  when: manual
+  allow_failure: false
+
+terraform:apply:prod:
+  extends:
+    - .terraform_base
+    - .rules_main
+  stage: apply
+  needs: [terraform:plan:prod]
+  variables:
+    TF_DIR: terraform/environments/prod
+    ENVIRONMENT: prod
+  environment:
+    name: production
+    action: start
+  script:
+    - terraform apply -auto-approve tfplan.binary
+  when: manual
+  allow_failure: false
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      when: manual
+      allow_failure: false

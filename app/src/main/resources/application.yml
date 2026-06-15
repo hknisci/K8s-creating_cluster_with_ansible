@@ -1,0 +1,34 @@
+server:
+  port: 8080
+  shutdown: graceful
+
+spring:
+  application:
+    name: query-param-app
+  lifecycle:
+    timeout-per-shutdown-phase: 30s
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus,metrics
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+  health:
+    livenessState:
+      enabled: true
+    readinessState:
+      enabled: true
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+logging:
+  level:
+    root: INFO
+    com.dreamgames: INFO
+  config: classpath:logback-spring.xml

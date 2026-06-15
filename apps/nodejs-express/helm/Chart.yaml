@@ -1,0 +1,13 @@
+apiVersion: v2
+name: nodejs-express
+description: Production-grade Helm chart for Node.js Express application
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - nodejs
+  - express
+  - api
+maintainers:
+  - name: platform-team
+    email: platform@example.com

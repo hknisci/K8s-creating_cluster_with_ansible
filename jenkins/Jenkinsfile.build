@@ -1,0 +1,130 @@
+// Build Pipeline: checkout → test → build JAR → Docker build/push → tag
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: maven
+    image: maven:3.9-eclipse-temurin-21-alpine
+    command: ['sleep', '99d']
+    resources:
+      requests:
+        cpu: 500m
+        memory: 512Mi
+  - name: docker
+    image: docker:24-dind
+    securityContext:
+      privileged: true
+    env:
+    - name: DOCKER_TLS_CERTDIR
+      value: ""
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+"""
+        }
+    }
+
+    environment {
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-credentials')
+        DOCKER_IMAGE          = "dreamgames/query-param-app"
+        IMAGE_TAG             = "${env.BUILD_NUMBER}-${env.GIT_COMMIT?.take(7) ?: 'unknown'}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Unit Tests') {
+            steps {
+                container('maven') {
+                    dir('app') {
+                        sh 'mvn test -q'
+                    }
+                }
+            }
+            post {
+                always {
+                    junit allowEmptyResults: true, testResults: 'app/target/surefire-reports/*.xml'
+                }
+            }
+        }
+
+        stage('Build JAR') {
+            steps {
+                container('maven') {
+                    dir('app') {
+                        sh 'mvn package -DskipTests -q'
+                        archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
+                    }
+                }
+            }
+        }
+
+        stage('Docker Build') {
+            steps {
+                container('docker') {
+                    dir('app') {
+                        sh """
+                            docker build \
+                                --label git-commit=${env.GIT_COMMIT} \
+                                --label build-number=${env.BUILD_NUMBER} \
+                                -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
+                                -t ${DOCKER_IMAGE}:latest \
+                                .
+                        """
+                    }
+                }
+            }
+        }
+
+        stage('Docker Push') {
+            steps {
+                container('docker') {
+                    sh """
+                        echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u "${DOCKERHUB_CREDENTIALS_USR}" --password-stdin
+                        docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                        docker push ${DOCKER_IMAGE}:latest
+                    """
+                }
+            }
+        }
+
+        stage('Tag Release') {
+            when {
+                branch 'main'
+            }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'github-credentials',
+                                                  usernameVariable: 'GIT_USER',
+                                                  passwordVariable: 'GIT_TOKEN')]) {
+                    sh """
+                        git config user.email "jenkins@dreamgames.com"
+                        git config user.name "Jenkins"
+                        git tag -a v${IMAGE_TAG} -m "Release ${IMAGE_TAG}"
+                        git push https://${GIT_USER}:${GIT_TOKEN}@github.com/\${GIT_URL#*github.com/} v${IMAGE_TAG}
+                    """
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Build ${IMAGE_TAG} completed with status: ${currentBuild.currentResult}"
+        }
+        success {
+            echo "Image pushed: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+        }
+        failure {
+            echo "Build failed — check logs above"
+        }
+    }
+}

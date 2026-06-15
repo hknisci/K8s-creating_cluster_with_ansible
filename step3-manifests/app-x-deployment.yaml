@@ -1,0 +1,48 @@
+# App X: Real-time, HA — Guaranteed QoS (requests == limits)
+# Guaranteed QoS means this pod is the LAST to be OOM-killed
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: app-x
+  namespace: app
+  labels:
+    app: app-x
+    tier: realtime
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: app-x
+  template:
+    metadata:
+      labels:
+        app: app-x
+    spec:
+      priorityClassName: high-priority-realtime
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              app: app-x
+      containers:
+        - name: app-x
+          image: dreamgames/app-x:1.0.0
+          resources:
+            requests:
+              cpu: 500m
+              memory: 256Mi
+            limits:
+              cpu: 500m       # requests == limits → Guaranteed QoS
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            periodSeconds: 20
