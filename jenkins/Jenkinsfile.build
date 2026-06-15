@@ -1,4 +1,4 @@
-// Build Pipeline: checkout → test → build JAR → Docker build/push → tag
+// Build Pipeline: checkout → test → build JAR → Docker build/push → scan → tag
 pipeline {
     agent {
         kubernetes {
@@ -77,10 +77,27 @@ spec:
                                 --label git-commit=${env.GIT_COMMIT} \
                                 --label build-number=${env.BUILD_NUMBER} \
                                 -t ${DOCKER_IMAGE}:${IMAGE_TAG} \
-                                -t ${DOCKER_IMAGE}:latest \
                                 .
                         """
                     }
+                }
+            }
+        }
+
+        stage('Image Scan') {
+            steps {
+                container('docker') {
+                    sh """
+                        docker run --rm \
+                            -v /var/run/docker.sock:/var/run/docker.sock \
+                            -v /tmp/trivy-cache:/root/.cache/trivy \
+                            aquasec/trivy:latest image \
+                            --exit-code 1 \
+                            --severity HIGH,CRITICAL \
+                            --no-progress \
+                            --format table \
+                            ${DOCKER_IMAGE}:${IMAGE_TAG}
+                    """
                 }
             }
         }
@@ -91,7 +108,6 @@ spec:
                     sh """
                         echo "${DOCKERHUB_CREDENTIALS_PSW}" | docker login -u "${DOCKERHUB_CREDENTIALS_USR}" --password-stdin
                         docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
-                        docker push ${DOCKER_IMAGE}:latest
                     """
                 }
             }
@@ -121,7 +137,7 @@ spec:
             echo "Build ${IMAGE_TAG} completed with status: ${currentBuild.currentResult}"
         }
         success {
-            echo "Image pushed: ${DOCKER_IMAGE}:${IMAGE_TAG}"
+            echo "Image pushed: ${DOCKER_IMAGE}:${IMAGE_TAG} (no latest tag — immutable builds)"
         }
         failure {
             echo "Build failed — check logs above"
