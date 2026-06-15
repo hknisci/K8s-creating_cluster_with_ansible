@@ -98,20 +98,27 @@ func validateDeployment(ar *admissionv1.AdmissionReview) *admissionv1.AdmissionR
 	}
 
 	var violations []string
-	for _, container := range deployment.Spec.Template.Spec.Containers {
-		if container.Resources.Requests == nil {
+	checkResources := func(name, kind string, res corev1.ResourceRequirements) {
+		if res.Requests == nil {
 			violations = append(violations, fmt.Sprintf(
-				"container %q: missing resource requests (cpu and memory required)", container.Name))
-			continue
+				"%s %q: missing resource requests (cpu and memory required)", kind, name))
+			return
 		}
-		if _, ok := container.Resources.Requests[corev1.ResourceCPU]; !ok {
+		if _, ok := res.Requests[corev1.ResourceCPU]; !ok {
 			violations = append(violations, fmt.Sprintf(
-				"container %q: missing cpu request", container.Name))
+				"%s %q: missing cpu request", kind, name))
 		}
-		if _, ok := container.Resources.Requests[corev1.ResourceMemory]; !ok {
+		if _, ok := res.Requests[corev1.ResourceMemory]; !ok {
 			violations = append(violations, fmt.Sprintf(
-				"container %q: missing memory request", container.Name))
+				"%s %q: missing memory request", kind, name))
 		}
+	}
+
+	for _, c := range deployment.Spec.Template.Spec.InitContainers {
+		checkResources(c.Name, "initContainer", c.Resources)
+	}
+	for _, c := range deployment.Spec.Template.Spec.Containers {
+		checkResources(c.Name, "container", c.Resources)
 	}
 
 	if len(violations) > 0 {
