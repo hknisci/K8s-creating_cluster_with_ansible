@@ -5,16 +5,20 @@
     state: directory
     mode: '0755'
 
+- name: Set Kubernetes minor version for repo URL
+  set_fact:
+    k8s_minor: "{{ kubernetes_version.split('.')[0] }}.{{ kubernetes_version.split('.')[1] }}"
+
 - name: Download Kubernetes GPG key
   shell: >
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.28/deb/Release.key
+    curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/Release.key
     | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
   args:
     creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
 
 - name: Add Kubernetes repository
   apt_repository:
-    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.28/deb/ /"
+    repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_minor }}/deb/ /"
     state: present
     filename: kubernetes
 

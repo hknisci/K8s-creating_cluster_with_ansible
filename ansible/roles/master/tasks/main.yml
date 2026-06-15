@@ -4,14 +4,15 @@
     path: /etc/kubernetes/admin.conf
   register: kubeadm_conf
 
+- name: Render kubeadm config
+  template:
+    src: kubeadm-config.yaml.j2
+    dest: /tmp/kubeadm-config.yaml
+    mode: '0600'
+  when: not kubeadm_conf.stat.exists
+
 - name: Initialize Kubernetes cluster
-  command: >
-    kubeadm init
-    --apiserver-advertise-address={{ api_server_address }}
-    --pod-network-cidr={{ pod_cidr }}
-    --service-cidr={{ service_cidr }}
-    --kubernetes-version={{ kubernetes_version }}
-    --node-name=master
+  command: kubeadm init --config=/tmp/kubeadm-config.yaml --upload-certs
   when: not kubeadm_conf.stat.exists
   register: kubeadm_init
 
