@@ -16,6 +16,7 @@ import (
 	admissionv1 "k8s.io/api/admission/v1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 
@@ -28,7 +29,6 @@ var (
 	scheme = runtime.NewScheme()
 	codecs = serializer.NewCodecFactory(scheme)
 
-	// Prometheus metrics
 	validatedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "webhook_validations_total",
 		Help: "Total number of admission reviews processed",
@@ -48,12 +48,9 @@ var (
 	})
 )
 
-// allowedNamespaces reads from ConfigMap-mounted env var or file.
-// In production: mounted from ConfigMap at /etc/webhook/namespaces
 func allowedNamespaces() map[string]bool {
 	ns := os.Getenv("WEBHOOK_NAMESPACES")
 	if ns == "" {
-		// Try reading from ConfigMap volume mount
 		data, err := os.ReadFile("/etc/webhook/namespaces")
 		if err == nil {
 			ns = string(data)
@@ -80,7 +77,6 @@ func validateDeployment(ar *admissionv1.AdmissionReview) *admissionv1.AdmissionR
 	req := ar.Request
 	namespace := req.Namespace
 
-	// Only validate namespaces in the allow-list
 	if !allowedNamespaces()[namespace] {
 		return &admissionv1.AdmissionResponse{
 			UID:     req.UID,
@@ -94,8 +90,9 @@ func validateDeployment(ar *admissionv1.AdmissionReview) *admissionv1.AdmissionR
 		return &admissionv1.AdmissionResponse{
 			UID:     req.UID,
 			Allowed: false,
-			Result: &metav1StatusError{
+			Result: &metav1.Status{
 				Message: fmt.Sprintf("could not decode deployment: %v", err),
+				Code:    400,
 			},
 		}
 	}
@@ -125,7 +122,10 @@ func validateDeployment(ar *admissionv1.AdmissionReview) *admissionv1.AdmissionR
 		return &admissionv1.AdmissionResponse{
 			UID:     req.UID,
 			Allowed: false,
-			Result:  &statusError{Message: msg, Code: 422},
+			Result: &metav1.Status{
+				Message: msg,
+				Code:    422,
+			},
 		}
 	}
 
@@ -136,17 +136,6 @@ func validateDeployment(ar *admissionv1.AdmissionReview) *admissionv1.AdmissionR
 	}
 }
 
-// statusError is a minimal metav1.Status stand-in
-type statusError struct {
-	Message string
-	Code    int32
-}
-
-// metav1StatusError for decode errors
-type metav1StatusError struct {
-	Message string
-}
-
 func handleValidate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -154,8 +143,7 @@ func handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	contentType := r.Header.Get("Content-Type")
-	if contentType != "application/json" {
+	if r.Header.Get("Content-Type") != "application/json" {
 		http.Error(w, "expected Content-Type: application/json", http.StatusUnsupportedMediaType)
 		return
 	}
@@ -166,8 +154,7 @@ func handleValidate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := validateDeployment(&ar)
-	ar.Response = response
+	ar.Response = validateDeployment(&ar)
 
 	resp, err := json.Marshal(ar)
 	if err != nil {
@@ -197,8 +184,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/validate", handleValidate)
-	mux.HandleFunc("/health",   handleHealth)
-	mux.Handle("/metrics",      promhttp.Handler())
+	mux.HandleFunc("/health", handleHealth)
 
 	server := &http.Server{
 		Addr:         ":8443",
@@ -206,6 +192,24 @@ func main() {
 		ReadTimeout:  10 * time.Second,
 		WriteTimeout: 10 * time.Second,
 	}
+
+	// Metrics served on plain HTTP port so Prometheus can scrape without TLS
+	metricsMux := http.NewServeMux()
+	metricsMux.Handle("/metrics", promhttp.Handler())
+	metricsMux.HandleFunc("/health", handleHealth)
+	metricsServer := &http.Server{
+		Addr:         ":8080",
+		Handler:      metricsMux,
+		ReadTimeout:  10 * time.Second,
+		WriteTimeout: 10 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Starting metrics server on :8080 (HTTP)")
+		if err := metricsServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Metrics server failed: %v", err)
+		}
+	}()
 
 	go func() {
 		log.Printf("Starting webhook server on :8443 (TLS)")
@@ -218,11 +222,12 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 	<-quit
 
-	log.Println("Shutting down webhook server...")
+	log.Println("Shutting down servers...")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	_ = metricsServer.Shutdown(ctx)
 	if err := server.Shutdown(ctx); err != nil {
 		log.Fatalf("Server forced to shutdown: %v", err)
 	}
-	log.Println("Server exited")
+	log.Println("Servers exited")
 }

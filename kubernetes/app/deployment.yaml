@@ -26,6 +26,7 @@ spec:
         prometheus.io/path: "/actuator/prometheus"
         prometheus.io/port: "8080"
     spec:
+      serviceAccountName: query-param-app
       # Graceful shutdown
       terminationGracePeriodSeconds: 30
       # Evenly spread pods across worker1 and worker2

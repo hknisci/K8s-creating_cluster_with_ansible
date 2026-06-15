@@ -63,16 +63,15 @@ controller:
             url: "http://jenkins.example.com"
 
   installPlugins:
-    - git:latest
-    - workflow-aggregator:latest
-    - docker-workflow:latest
-    - ansible:latest
-    - kubernetes:latest
-    - credentials-binding:latest
-    - pipeline-stage-view:latest
-    - blueocean:latest
-    - prometheus:latest
-    - configuration-as-code:latest
+    - git:5.2.1
+    - workflow-aggregator:596.v8c21c963d92d
+    - docker-workflow:572.v950f58993843
+    - ansible:307.vf58f1680be8b
+    - kubernetes:4236.v43b_b_66fea_a_a_3
+    - credentials-binding:657.v2b_19db_7d6e6d
+    - pipeline-stage-view:2.34
+    - prometheus:781.v6c7e3e1d2e62
+    - configuration-as-code:1836.vccda_4a_122a_a_e
 
   serviceType: LoadBalancer
   loadBalancerIP: "192.168.56.201"

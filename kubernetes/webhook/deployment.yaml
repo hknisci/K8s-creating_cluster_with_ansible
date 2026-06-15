@@ -17,8 +17,7 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/metrics"
-        prometheus.io/port: "8443"
-        prometheus.io/scheme: "https"
+        prometheus.io/port: "8080"
     spec:
       serviceAccountName: resource-webhook
       securityContext:
@@ -33,6 +32,8 @@ spec:
           ports:
             - containerPort: 8443
               name: https
+            - containerPort: 8080
+              name: metrics
           env:
             - name: WEBHOOK_NAMESPACES
               valueFrom:

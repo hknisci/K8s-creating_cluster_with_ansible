@@ -3,13 +3,16 @@ kind: ValidatingWebhookConfiguration
 metadata:
   name: resource-requests-webhook
   annotations:
-    # cert-manager or manual CA bundle injection
-    # cert-manager.io/inject-ca-from: webhook-system/resource-webhook-cert
+    # After running tls/generate-certs.sh, patch caBundle:
+    # CA_BUNDLE=$(kubectl get secret resource-webhook-tls -n webhook-system \
+    #   -o jsonpath='{.data.ca\.crt}')
+    # kubectl patch validatingwebhookconfiguration resource-requests-webhook \
+    #   --type='json' -p="[{'op':'replace','path':'/webhooks/0/clientConfig/caBundle','value':'${CA_BUNDLE}'}]"
 webhooks:
   - name: resource-requests.dreamgames.com
     admissionReviewVersions: ["v1"]
     sideEffects: None
-    failurePolicy: Ignore
+    failurePolicy: Fail
     namespaceSelector:
       matchExpressions:
         - key: name
@@ -30,6 +33,6 @@ webhooks:
         namespace: webhook-system
         path: /validate
         port: 443
-      # Base64-encoded CA bundle (replace with actual CA cert after TLS setup)
+      # Populated by generate-certs.sh — see annotation above
       caBundle: ""
     timeoutSeconds: 10

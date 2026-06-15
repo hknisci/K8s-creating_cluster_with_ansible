@@ -34,6 +34,7 @@
     - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
     - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
     - { key: "net.ipv4.ip_forward",                 value: "1" }
+    - { key: "vm.max_map_count",                    value: "262144" }
 
 - name: Install prerequisite packages
   apt:

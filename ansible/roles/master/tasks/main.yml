@@ -47,14 +47,14 @@
     KUBECONFIG: /home/vagrant/.kube/config
 
 - name: Get join command
-  command: kubeadm token create --print-join-command
+  command: kubeadm token create --print-join-command --ttl 1h
   register: join_command
 
 - name: Save join command to file
   copy:
     content: "{{ join_command.stdout }}"
     dest: /tmp/kubeadm-join.sh
-    mode: '0755'
+    mode: '0600'
 
 - name: Fetch join command to local
   fetch:

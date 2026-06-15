@@ -1,9 +1,11 @@
 ---
 # Application deployment playbook - called by Jenkins deploy pipeline
+# Runs on the Jenkins controller (localhost) with KUBECONFIG from environment
 # Usage: ansible-playbook ansible/deploy-app.yml -e "image_tag=abc1234 docker_user=myuser"
 - name: Deploy application to Kubernetes
-  hosts: master
-  become: false
+  hosts: localhost
+  connection: local
+  gather_facts: false
   vars:
     image_tag: "latest"
     docker_user: "dreamgames"
@@ -11,26 +13,20 @@
     manifest_dir: "kubernetes/app"
 
   tasks:
-    - name: Update image tag in deployment
+    - name: Update image tag in deployment manifest
       replace:
         path: "{{ manifest_dir }}/deployment.yaml"
         regexp: 'image: {{ docker_user }}/query-param-app:.*'
         replace: "image: {{ docker_user }}/query-param-app:{{ image_tag }}"
-      delegate_to: localhost
-
-    - name: Apply namespace
-      command: kubectl apply -f {{ manifest_dir }}/namespace.yaml
-      environment:
-        KUBECONFIG: /home/vagrant/.kube/config
 
     - name: Apply application manifests
       command: kubectl apply -f {{ manifest_dir }}/
       environment:
-        KUBECONFIG: /home/vagrant/.kube/config
+        KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
 
     - name: Wait for rollout to complete
       command: >
         kubectl rollout status deployment/query-param-app
         -n {{ app_namespace }} --timeout=300s
       environment:
-        KUBECONFIG: /home/vagrant/.kube/config
+        KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"

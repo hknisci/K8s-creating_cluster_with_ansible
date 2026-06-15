@@ -56,7 +56,9 @@ alertmanager:
     receivers:
       - name: 'slack-notifications'
         slack_configs:
-          - api_url: 'http://slack-webhook-placeholder'
+          - api_url_secret:
+              name: alertmanager-slack-secret
+              key: webhookUrl
             channel: '#alerts'
             title: '{{ template "slack.default.title" . }}'
             text: '{{ template "slack.default.text" . }}'
@@ -78,8 +80,8 @@ prometheus:
         cpu: 500m
         memory: 512Mi
       limits:
-        cpu: 2000m
-        memory: 2Gi
+        cpu: 1000m
+        memory: 512Mi
     storageSpec:
       volumeClaimTemplate:
         spec:
@@ -110,7 +112,7 @@ prometheus:
       - job_name: 'resource-webhook'
         scheme: https
         tls_config:
-          insecure_skip_verify: true
+          insecure_skip_verify: false
         kubernetes_sd_configs:
           - role: pod
             namespaces:
@@ -123,7 +125,11 @@ prometheus:
 
 grafana:
   enabled: true
-  adminPassword: "admin"
+  # kubectl create secret generic grafana-admin-secret -n monitoring \
+  #   --from-literal=admin-user=admin --from-literal=admin-password=<STRONG_PASSWORD>
+  adminPasswordSecretKeyRef:
+    name: grafana-admin-secret
+    key: admin-password
   resources:
     requests:
       cpu: 100m

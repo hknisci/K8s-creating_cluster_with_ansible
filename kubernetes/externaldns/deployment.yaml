@@ -1,6 +1,59 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
+  name: etcd
+  namespace: kube-system
+  labels:
+    app: etcd-external-dns
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: etcd-external-dns
+  template:
+    metadata:
+      labels:
+        app: etcd-external-dns
+    spec:
+      containers:
+        - name: etcd
+          image: registry.k8s.io/etcd:3.5.10-0
+          command:
+            - etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://etcd-external-dns.kube-system.svc.cluster.local:2379
+            - --data-dir=/var/etcd/data
+          ports:
+            - containerPort: 2379
+          volumeMounts:
+            - name: etcd-data
+              mountPath: /var/etcd/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+      volumes:
+        - name: etcd-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-external-dns
+  namespace: kube-system
+spec:
+  selector:
+    app: etcd-external-dns
+  ports:
+    - port: 2379
+      targetPort: 2379
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
   name: external-dns
   namespace: kube-system
   labels:
@@ -33,7 +86,7 @@ spec:
             - --interval=30s
           env:
             - name: ETCD_URLS
-              value: "http://etcd-cluster.kube-system.svc.cluster.local:2379"
+              value: "http://etcd-external-dns.kube-system.svc.cluster.local:2379"
           resources:
             requests:
               cpu: 50m

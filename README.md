@@ -3,7 +3,7 @@
 ## Overview
 
 Production-grade Kubernetes platform implementing all requirements of the Dream Games DevOps Case Study.
-Local cluster on Vagrant/VirtualBox, Java application, Jenkins CI/CD, full observability stack, and custom admission webhook.
+Local cluster on Vagrant/VirtualBox, Java Spring Boot application, Jenkins CI/CD, full observability stack, and custom admission webhook.
 
 ## Architecture
 
@@ -47,32 +47,32 @@ GitHub → Jenkins (Node 3, worker2)
 ├── app/                               # Java Spring Boot application
 │   ├── src/main/java/com/dreamgames/controller/QueryParamController.java
 │   ├── src/main/resources/logback-spring.xml   # Async file logging
+│   ├── src/test/                      # Unit tests (WebMvcTest)
 │   ├── pom.xml
 │   └── Dockerfile                     # Multi-stage Maven → JRE Alpine
 ├── kubernetes/
 │   ├── namespaces/                    # All namespace definitions
 │   ├── metallb/                       # LoadBalancer IP pool (192.168.56.200-220)
 │   ├── ingress-nginx/values.yaml      # Helm values
-│   ├── externaldns/                   # CoreDNS provider, RBAC, deployment
+│   ├── externaldns/                   # etcd + ExternalDNS (coredns provider)
 │   ├── jenkins/                       # Helm values (JCasC, Node 3, PV, LoadBalancer)
 │   ├── monitoring/                    # kube-prometheus-stack, ECK, fluent-bit
 │   │   ├── alertmanager-rules.yaml    # PodCrashLooping + app alerts
 │   │   └── ingress-monitoring.yaml    # /grafana /prometheus /elasticsearch
-│   ├── app/                           # Deployment, Service, Ingress, HPA, PDB
+│   ├── app/                           # Deployment, ServiceAccount, Service, Ingress, HPA, PDB
 │   └── webhook/                       # Admission webhook manifests + TLS setup
-├── webhook/                           # Go source: /validate /metrics, TLS
+├── webhook/                           # Go source: /validate (TLS:8443) /metrics (HTTP:8080)
 ├── jenkins/
 │   ├── Jenkinsfile.build              # Build + DockerHub push
 │   └── Jenkinsfile.deploy             # Ansible deploy + rollout verify
 ├── step3-manifests/                   # Step 3: PriorityClass, canary, KEDA cron
-├── docs/design-answers/               # Step 3 & 4 written design documents
-└── [terraform/ gitops/ apps/]         # Bonus: GCP/GKE reference implementation
+└── docs/design-answers/               # Step 3 & 4 written design documents
 ```
 
 ## Prerequisites
 
 - Vagrant + VirtualBox
-- Ansible (`pip install ansible`)
+- Ansible 2.15+ (`pip install ansible`)
 - kubectl, Helm 3
 
 ## Quick Start
@@ -81,9 +81,9 @@ GitHub → Jenkins (Node 3, worker2)
 
 ```bash
 vagrant up
-# This creates 3 VMs and runs ansible/site.yml automatically
+# Creates 3 VMs and runs ansible/site.yml automatically
 
-# If running Ansible separately:
+# If running Ansible manually:
 ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml
 ```
 
@@ -98,7 +98,7 @@ kubectl get nodes   # master, worker1, worker2 all Ready
 ### 3. Install platform components (in order)
 
 ```bash
-# MetalLB (LoadBalancer support)
+# MetalLB (LoadBalancer support for bare-metal)
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.3/config/manifests/metallb-native.yaml
 kubectl wait --for=condition=available deployment -n metallb-system controller --timeout=90s
 kubectl apply -f kubernetes/metallb/ipaddresspool.yaml
@@ -109,24 +109,35 @@ helm install ingress-nginx ingress-nginx/ingress-nginx \
   -n ingress-nginx --create-namespace \
   -f kubernetes/ingress-nginx/values.yaml
 
-# ExternalDNS
+# ExternalDNS (deploys lightweight etcd + ExternalDNS with coredns provider)
 kubectl apply -f kubernetes/externaldns/rbac.yaml
 kubectl apply -f kubernetes/externaldns/deployment.yaml
 
 # Jenkins (Node 3 / worker2)
+kubectl apply -f kubernetes/jenkins/storageclass.yaml
 kubectl apply -f kubernetes/jenkins/pv.yaml
+# Create secrets (never hardcoded — use your actual values)
 kubectl create secret generic jenkins-credentials \
-  --from-literal=admin-password=YOUR_PASS \
-  --from-literal=dockerhub-user=YOUR_USER \
-  --from-literal=dockerhub-token=YOUR_TOKEN \
-  --from-literal=github-user=YOUR_USER \
-  --from-literal=github-token=YOUR_TOKEN \
+  --from-literal=admin-password=<STRONG_PASSWORD> \
+  --from-literal=dockerhub-user=<YOUR_DOCKERHUB_USER> \
+  --from-literal=dockerhub-token=<YOUR_DOCKERHUB_TOKEN> \
+  --from-literal=github-user=<YOUR_GITHUB_USER> \
+  --from-literal=github-token=<YOUR_GITHUB_TOKEN> \
   -n jenkins
 helm repo add jenkins https://charts.jenkins.io
 helm install jenkins jenkins/jenkins -n jenkins --create-namespace \
   -f kubernetes/jenkins/values.yaml
 
+# Add kubeconfig for Jenkins deploy pipeline
+kubectl create secret generic kubeconfig \
+  --from-file=config=${KUBECONFIG} -n jenkins
+
 # Monitoring stack
+kubectl create secret generic grafana-admin-secret -n monitoring \
+  --from-literal=admin-user=admin \
+  --from-literal=admin-password=<STRONG_PASSWORD>
+kubectl create secret generic alertmanager-slack-secret -n monitoring \
+  --from-literal=webhookUrl=<YOUR_SLACK_WEBHOOK_URL>
 helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   -n monitoring --create-namespace \
@@ -155,11 +166,11 @@ kubectl apply -f kubernetes/monitoring/ingress-monitoring.yaml
 # Namespaces
 kubectl apply -f kubernetes/namespaces/namespaces.yaml
 
-# Application manifests
+# Application manifests (ServiceAccount + Deployment + Service + Ingress + HPA + PDB)
 kubectl apply -f kubernetes/app/
 
 # Test
-curl http://app.example.com/api/echo?hello=world&foo=bar
+curl 'http://app.example.com/api/echo?hello=world&foo=bar'
 # Response: {"hello":"world","foo":"bar"}
 ```
 
@@ -167,14 +178,25 @@ curl http://app.example.com/api/echo?hello=world&foo=bar
 
 ```bash
 kubectl apply -f kubernetes/webhook/namespace.yaml
+kubectl apply -f kubernetes/webhook/rbac.yaml
 kubectl apply -f kubernetes/webhook/configmap.yaml
+
+# Generate TLS certs and create the secret
 bash kubernetes/webhook/tls/generate-certs.sh
+
 kubectl apply -f kubernetes/webhook/deployment.yaml
 kubectl apply -f kubernetes/webhook/service.yaml
 kubectl apply -f kubernetes/webhook/validatingwebhookconfiguration.yaml
 
+# Patch caBundle (required — webhook won't work without this)
+CA_BUNDLE=$(kubectl get secret resource-webhook-tls -n webhook-system \
+  -o jsonpath='{.data.ca\.crt}')
+kubectl patch validatingwebhookconfiguration resource-requests-webhook \
+  --type='json' \
+  -p="[{\"op\":\"replace\",\"path\":\"/webhooks/0/clientConfig/caBundle\",\"value\":\"${CA_BUNDLE}\"}]"
+
 # Test: deploy without resource requests → should be rejected
-kubectl apply -f - <<EOF
+kubectl apply -f - <<'EOF'
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -197,14 +219,21 @@ spec:
 EOF
 ```
 
-## Access URLs
+### Local DNS setup
 
-After `/etc/hosts` entry: `192.168.56.200 app.example.com monitoring.example.com jenkins.example.com`
+Add to `/etc/hosts` on your local machine:
+
+```
+192.168.56.200  app.example.com monitoring.example.com
+192.168.56.201  jenkins.example.com
+```
+
+## Access URLs
 
 | Service | URL |
 |---------|-----|
 | Application | http://app.example.com/api/echo?param=value |
-| Jenkins | http://192.168.56.201:8080 |
+| Jenkins | http://jenkins.example.com:8080 |
 | Grafana | http://monitoring.example.com/grafana |
 | Prometheus | http://monitoring.example.com/prometheus |
 | Elasticsearch | http://monitoring.example.com/elasticsearch |
@@ -224,6 +253,7 @@ Jenkins Deploy Pipeline (Jenkinsfile.deploy)
   ① ansible-playbook deploy-app.yml -e image_tag=<tag>
   ② kubectl rollout status (waits for zero-downtime rollout)
   ③ smoke test: GET /api/echo → 200 OK
+  ④ auto-rollback on failure: kubectl rollout undo
 ```
 
 ### Zero-Downtime Deployment
@@ -241,16 +271,16 @@ strategy:
 
 ## Application — Log Design (Step 1.7)
 
-**Problem:** stdout logging blocks main thread, degrades throughput.
+**Problem:** stdout logging blocks main thread under high request load.
 
 **Solution:** Logback `AsyncAppender` wrapping `SizeAndTimeBasedRollingPolicy`.
 
 ```
-Main thread → AsyncAppender (queue: 256, non-blocking)
+Main thread → AsyncAppender (queue: 256, non-blocking, discardingThreshold: 0)
                    │ async, separate thread
                    ▼
            RollingFileAppender
-           /app/logs/app.2024-01-15.log
+           /app/logs/app.YYYY-MM-DD.log
            maxFileSize: 1GB
            rotation: daily
            totalSizeCap: 10GB
@@ -258,7 +288,18 @@ Main thread → AsyncAppender (queue: 256, non-blocking)
 
 Config: `app/src/main/resources/logback-spring.xml`
 
-Fluent-bit reads from `/app/logs/*.log` (file input) and forwards to Elasticsearch.
+Fluent-bit reads from `/app/logs/*.log` (file tail input) and forwards to Elasticsearch.
+
+## HPA vs KEDA (Step 3.2)
+
+`kubernetes/app/hpa.yaml` is the default autoscaler (CPU 70% + memory 80%).
+
+`step3-manifests/hpa-scheduled.yaml` replaces it with KEDA CronTrigger for pre-emptive scaling before peak hours. **Do not apply both simultaneously** — delete the standalone HPA before applying KEDA:
+
+```bash
+kubectl delete hpa query-param-app -n app
+kubectl apply -f step3-manifests/hpa-scheduled.yaml
+```
 
 ## Step 3 — Design Decisions
 
@@ -279,15 +320,6 @@ See `docs/design-answers/` for full writeups with manifests and reviewer defense
 | 4.2 | iOS build automation with fastlane | [step4-ios-automation.md](docs/design-answers/step4-ios-automation.md) |
 | 4.3 | AWS Kubernetes disaster recovery | [step4-aws-dr.md](docs/design-answers/step4-aws-dr.md) |
 
-## Assumptions
-
-- VMs have internet access for package downloads
-- DockerHub credentials stored in Jenkins Kubernetes Secrets
-- DNS resolution for `*.example.com` added to `/etc/hosts` on local machine
-- `master.ipv4_cidr_block` of 172.16.0.0/28 conflicts with no existing network
-- Elasticsearch runs with `xpack.security.enabled: false` for simplicity (prod: TLS + auth)
-- Jenkins `mac1.metal` licensing not applicable in this local setup (addressed in Step 4 docs)
-
 ## Kubernetes Cluster Spec
 
 | Parameter | Value |
@@ -295,12 +327,13 @@ See `docs/design-answers/` for full writeups with manifests and reviewer defense
 | Kubernetes version | 1.28.x |
 | Container runtime | containerd 1.7 |
 | CNI | Calico v3.27 |
-| Pod CIDR | 10.244.0.0/16 (custom) |
-| Service CIDR | 10.96.0.0/12 (custom) |
+| Pod CIDR | 10.244.0.0/16 |
+| Service CIDR | 10.96.0.0/12 |
 | LoadBalancer | MetalLB v0.14 (192.168.56.200-220) |
 | Node OS | Ubuntu 22.04 |
+| Jenkins node | worker2 (Node 3), hostPath PV, 20Gi |
 
-## Notes Section Requirements Coverage
+## Requirements Coverage
 
 | Requirement | Coverage |
 |-------------|---------|
@@ -308,4 +341,7 @@ See `docs/design-answers/` for full writeups with manifests and reviewer defense
 | Jenkins deployment | Helm, JCasC, Node 3 nodeSelector, PVC, LoadBalancer |
 | Prometheus, Grafana, ES, fluent-bit, AlertManager | kube-prometheus-stack + ECK + fluent-bit Helm |
 | Application build stages | Jenkinsfile.build (test → build → docker → push) |
-| Application deployment with Ansible | Jenkinsfile.deploy → deploy-app.yml |
+| Application deployment with Ansible | Jenkinsfile.deploy → ansible/deploy-app.yml |
+| Async log design | Logback AsyncAppender + SizeAndTimeBasedRollingPolicy |
+| Custom admission webhook | Go, /validate (TLS), /metrics (HTTP), ConfigMap allow-list |
+| ExternalDNS | coredns provider with embedded etcd pod |

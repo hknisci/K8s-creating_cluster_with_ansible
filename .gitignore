@@ -1,15 +1,9 @@
-# Terraform
-.terraform/
-.terraform.lock.hcl
-*.tfstate
-*.tfstate.backup
-*.tfplan
-tfplan.binary
-tfplan.txt
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
+# Maven build output
+app/target/
+app/target/**
+
+# Go build output
+webhook/webhook
 
 # Sensitive files - never commit
 *.pem
@@ -23,11 +17,9 @@ credentials.json
 .env.*
 !.env.example
 
-# Node.js
-node_modules/
-npm-debug.log*
-coverage/
-dist/
+# Generated TLS certs (created by generate-certs.sh)
+kubernetes/webhook/tls/*.crt
+kubernetes/webhook/tls/*.csr
 
 # OS
 .DS_Store
