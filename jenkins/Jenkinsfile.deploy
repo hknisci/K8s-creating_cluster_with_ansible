@@ -1,0 +1,116 @@
+// Deploy Pipeline: checkout → validate → ansible deploy → verify rollout
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: ansible
+    image: cytopia/ansible:2.15-tools
+    command: ['sleep', '99d']
+    resources:
+      requests:
+        cpu: 200m
+        memory: 256Mi
+  - name: kubectl
+    image: bitnami/kubectl:1.28
+    command: ['sleep', '99d']
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+"""
+        }
+    }
+
+    parameters {
+        string(name: 'IMAGE_TAG',    defaultValue: 'latest',  description: 'Docker image tag to deploy')
+        choice(name: 'ENVIRONMENT',  choices: ['app', 'staging'], description: 'Target namespace')
+        booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'Run in dry-run mode (no changes)')
+    }
+
+    environment {
+        DOCKER_IMAGE  = "dreamgames/query-param-app"
+        KUBECONFIG    = credentials('kubeconfig')
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate Manifests') {
+            steps {
+                container('kubectl') {
+                    sh """
+                        kubectl apply -f kubernetes/app/ \
+                            --dry-run=client \
+                            --namespace=${params.ENVIRONMENT}
+                    """
+                }
+            }
+        }
+
+        stage('Deploy via Ansible') {
+            steps {
+                container('ansible') {
+                    sh """
+                        ansible-playbook ansible/deploy-app.yml \
+                            -i ansible/inventory/hosts.ini \
+                            -e image_tag=${params.IMAGE_TAG} \
+                            -e docker_user=dreamgames \
+                            -e app_namespace=${params.ENVIRONMENT} \
+                            ${params.DRY_RUN ? '--check' : ''}
+                    """
+                }
+            }
+        }
+
+        stage('Verify Rollout') {
+            when {
+                not { expression { params.DRY_RUN } }
+            }
+            steps {
+                container('kubectl') {
+                    sh """
+                        kubectl rollout status deployment/query-param-app \
+                            -n ${params.ENVIRONMENT} \
+                            --timeout=300s
+                        kubectl get pods -n ${params.ENVIRONMENT} -l app=query-param-app -o wide
+                    """
+                }
+            }
+        }
+
+        stage('Smoke Test') {
+            when {
+                not { expression { params.DRY_RUN } }
+            }
+            steps {
+                sh """
+                    sleep 10
+                    curl -sf http://app.example.com/api/echo?smoke=true | grep smoke || exit 1
+                    echo "Smoke test passed"
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "Deployed ${DOCKER_IMAGE}:${params.IMAGE_TAG} to ${params.ENVIRONMENT}"
+        }
+        failure {
+            container('kubectl') {
+                sh """
+                    echo "Deployment failed — rolling back..."
+                    kubectl rollout undo deployment/query-param-app -n ${params.ENVIRONMENT} || true
+                """
+            }
+        }
+    }
+}

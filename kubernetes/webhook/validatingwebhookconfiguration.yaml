@@ -1,0 +1,35 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: resource-requests-webhook
+  annotations:
+    # cert-manager or manual CA bundle injection
+    # cert-manager.io/inject-ca-from: webhook-system/resource-webhook-cert
+webhooks:
+  - name: resource-requests.dreamgames.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Ignore
+    namespaceSelector:
+      matchExpressions:
+        - key: name
+          operator: In
+          values:
+            - app
+            - production
+            - staging
+    rules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+        scope: Namespaced
+    clientConfig:
+      service:
+        name: resource-webhook
+        namespace: webhook-system
+        path: /validate
+        port: 443
+      # Base64-encoded CA bundle (replace with actual CA cert after TLS setup)
+      caBundle: ""
+    timeoutSeconds: 10

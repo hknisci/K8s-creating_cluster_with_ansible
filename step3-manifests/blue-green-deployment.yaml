@@ -1,0 +1,102 @@
+
+# Step 3.3: Blue-Green Deployment
+# Two identical deployments; traffic switches by changing service selector.
+# Rollback: flip selector back to blue. Instant, zero-downtime.
+
+# Blue (current production)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-param-app-blue
+  namespace: app
+  labels:
+    app: query-param-app
+    track: blue
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: query-param-app
+      track: blue
+  template:
+    metadata:
+      labels:
+        app: query-param-app
+        track: blue
+    spec:
+      containers:
+        - name: app
+          image: dreamgames/query-param-app:1.0.0
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+---
+# Green (new version — staged, not yet receiving traffic)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-param-app-green
+  namespace: app
+  labels:
+    app: query-param-app
+    track: green
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: query-param-app
+      track: green
+  template:
+    metadata:
+      labels:
+        app: query-param-app
+        track: green
+    spec:
+      containers:
+        - name: app
+          image: dreamgames/query-param-app:2.0.0
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            periodSeconds: 10
+---
+# Service — currently points to blue
+# To cut over to green:
+#   kubectl patch service query-param-app-bg -n app \
+#     -p '{"spec":{"selector":{"track":"green"}}}'
+# To rollback:
+#   kubectl patch service query-param-app-bg -n app \
+#     -p '{"spec":{"selector":{"track":"blue"}}}'
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-param-app-bg
+  namespace: app
+spec:
+  selector:
+    app: query-param-app
+    track: blue          # Change to "green" to cut over
+  ports:
+    - port: 80
+      targetPort: 8080

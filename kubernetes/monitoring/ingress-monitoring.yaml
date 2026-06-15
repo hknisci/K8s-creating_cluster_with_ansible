@@ -1,0 +1,42 @@
+# Single hostname with path-based routing to monitoring tools
+# Access:
+#   http://monitoring.example.com/grafana
+#   http://monitoring.example.com/prometheus
+#   http://monitoring.example.com/elasticsearch
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: monitoring-ingress
+  namespace: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      more_set_headers "X-Content-Type-Options: nosniff";
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: monitoring.example.com
+      http:
+        paths:
+          - path: /grafana(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: kube-prometheus-stack-grafana
+                port:
+                  number: 80
+          - path: /prometheus(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: kube-prometheus-stack-prometheus
+                port:
+                  number: 9090
+          - path: /elasticsearch(/|$)(.*)
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: elasticsearch-es-http
+                port:
+                  number: 9200

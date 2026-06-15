@@ -1,0 +1,130 @@
+# Step 3.3: Canary Deployment using ingress-nginx annotations
+# Traffic split: 90% → stable, 10% → canary
+# Gradually shift canary-weight from 10 → 50 → 100 then retire stable
+
+# Stable deployment (existing)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-param-app-stable
+  namespace: app
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app: query-param-app
+      track: stable
+  template:
+    metadata:
+      labels:
+        app: query-param-app
+        track: stable
+    spec:
+      containers:
+        - name: app
+          image: dreamgames/query-param-app:1.0.0
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-param-app-stable
+  namespace: app
+spec:
+  selector:
+    app: query-param-app
+    track: stable
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+# Canary deployment (new version)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-param-app-canary
+  namespace: app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: query-param-app
+      track: canary
+  template:
+    metadata:
+      labels:
+        app: query-param-app
+        track: canary
+    spec:
+      containers:
+        - name: app
+          image: dreamgames/query-param-app:2.0.0
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-param-app-canary
+  namespace: app
+spec:
+  selector:
+    app: query-param-app
+    track: canary
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+# Main ingress → stable
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: query-param-app
+  namespace: app
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: query-param-app-stable
+                port:
+                  number: 80
+---
+# Canary ingress — 10% traffic
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: query-param-app-canary
+  namespace: app
+  annotations:
+    nginx.ingress.kubernetes.io/canary: "true"
+    nginx.ingress.kubernetes.io/canary-weight: "10"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: query-param-app-canary
+                port:
+                  number: 80

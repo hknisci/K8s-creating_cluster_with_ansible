@@ -1,298 +1,311 @@
-# GCP / GKE / GitOps Platform
-
-A production-grade reference platform demonstrating Kubernetes infrastructure design, GitOps deployment, secret management, autoscaling, and security governance on GCP.
+# Dream Games — DevOps Engineering Case Study
 
 ## Overview
 
-This repository implements a complete DevOps platform for a Node.js Express application across `dev`, `staging`, and `prod` environments. It covers every layer of the stack: infrastructure provisioning (Terraform), container packaging (Docker / Artifact Registry), GitOps deployment (ArgoCD + Helm), secret management (GCP Secret Manager + ESO), autoscaling (HPA + KEDA), and policy enforcement (Kyverno).
+Production-grade Kubernetes platform implementing all requirements of the Dream Games DevOps Case Study.
+Local cluster on Vagrant/VirtualBox, Java application, Jenkins CI/CD, full observability stack, and custom admission webhook.
 
 ## Architecture
 
 ```
-Developer → GitLab CI → Artifact Registry
-                    ↓ terraform apply
-              GCP (VPC / GKE / Secret Manager / Cloud CDN)
-                    ↓ ArgoCD watches Git
-              GKE Cluster
-              ├── ArgoCD (App of Apps)
-              ├── External Secrets Operator
-              ├── KEDA
-              └── Workloads
-                  ├── dev-nodejs-express
-                  ├── staging-nodejs-express
-                  └── prod-nodejs-express
-                         ↑ Slack notifications
+Developer
+    │ git push
+    ▼
+GitHub → Jenkins (Node 3, worker2)
+    ├── Jenkinsfile.build   → Docker build → DockerHub
+    └── Jenkinsfile.deploy  → Ansible → kubectl apply
+                                    │
+                    ┌───────────────▼──────────────────┐
+                    │         Kubernetes Cluster        │
+                    │  (kubeadm 1.28, Calico, MetalLB)  │
+                    │                                   │
+                    │  ┌──────────────────────────┐     │
+                    │  │  app namespace            │     │
+                    │  │  query-param-app (4 pods) │     │
+                    │  │  → worker1 + worker2      │     │
+                    │  │  → Nginx Ingress          │     │
+                    │  └──────────────────────────┘     │
+                    │                                   │
+                    │  monitoring: Prometheus, Grafana  │
+                    │             ES, fluent-bit        │
+                    │  jenkins:   Node 3 only, PVC      │
+                    │  webhook-system: admission webhook│
+                    └───────────────────────────────────┘
 ```
-
-See [`docs/architecture.md`](docs/architecture.md) for the full Mermaid diagram, component breakdown, secret flow, image update flow, and KEDA scaling diagram.
 
 ## Repository Structure
 
 ```
 .
-├── README.md
-├── docs/
-│   ├── architecture.md          # Mermaid diagrams + component breakdown
-│   ├── assumptions.md           # 23 numbered assumptions with impact analysis
-│   └── tradeoffs.md             # 10 architectural decision records (ADRs)
-├── terraform/
-│   ├── versions.tf              # Provider version pins
-│   ├── environments/
-│   │   ├── dev/                 # Dev tfvars + backend (GCS)
-│   │   ├── staging/             # Staging tfvars + backend
-│   │   └── prod/                # Prod tfvars + backend (+ CDN)
-│   └── modules/
-│       ├── network/             # VPC, subnet, NAT, firewall
-│       ├── gke/                 # Private GKE cluster, Workload Identity
-│       ├── node-pool/           # Autoscaling node pool, shielded nodes
-│       ├── registry/            # Artifact Registry + cleanup policies
-│       ├── secret-manager/      # Secrets + ESO service account (WI)
-│       └── cdn/                 # Cloud CDN + GCS static assets
-├── gitops/
-│   ├── argocd/
-│   │   ├── install/             # Kustomize install (ArgoCD v2.9.3)
-│   │   ├── applications/        # App of Apps + per-env Applications
-│   │   └── notifications/       # Slack notification config + ESO secret ref
-│   ├── environments/            # Namespace manifests with PSA labels
-│   └── projects/                # ArgoCD AppProject with RBAC
-├── apps/nodejs-express/
-│   ├── src/                     # Express app (health, metrics endpoints)
-│   ├── Dockerfile               # Multi-stage, non-root, minimal Alpine
-│   ├── package.json
-│   └── helm/
-│       ├── Chart.yaml
-│       ├── values.yaml          # Base values (prod defaults)
-│       ├── values-dev.yaml      # Dev overrides
-│       ├── values-staging.yaml  # Staging overrides
-│       ├── values-prod.yaml     # Prod overrides (KEDA enabled)
-│       └── templates/           # deployment, service, ingress, hpa, pdb,
-│                                #   externalsecret, configmap, networkpolicy,
-│                                #   keda-scaledobject, serviceaccount
-├── ci/
-│   ├── gitlab-ci.yml            # Primary: validate→lint→scan→build→plan→apply
-│   └── github-actions.yml       # Alternative: equivalent GH Actions pipeline
-├── policies/
-│   ├── kyverno/                 # require-resources, disallow-latest, probes, non-root
-│   └── gatekeeper/              # OPA alternative: ConstraintTemplate + Constraint
-└── scripts/
-    ├── validate.sh              # Local validation runner
-    └── local-test.sh            # Docker build + endpoint smoke test
+├── Vagrantfile                        # 1 master + 2 workers (Ubuntu 22.04)
+├── ansible/
+│   ├── inventory/hosts.ini            # Vagrant IPs
+│   ├── group_vars/all.yml             # K8s version, CIDRs, versions
+│   ├── roles/                         # common, containerd, kubeadm, master, worker
+│   ├── site.yml                       # Full cluster bootstrap
+│   └── deploy-app.yml                 # App deployment (called by Jenkins)
+├── app/                               # Java Spring Boot application
+│   ├── src/main/java/com/dreamgames/controller/QueryParamController.java
+│   ├── src/main/resources/logback-spring.xml   # Async file logging
+│   ├── pom.xml
+│   └── Dockerfile                     # Multi-stage Maven → JRE Alpine
+├── kubernetes/
+│   ├── namespaces/                    # All namespace definitions
+│   ├── metallb/                       # LoadBalancer IP pool (192.168.56.200-220)
+│   ├── ingress-nginx/values.yaml      # Helm values
+│   ├── externaldns/                   # CoreDNS provider, RBAC, deployment
+│   ├── jenkins/                       # Helm values (JCasC, Node 3, PV, LoadBalancer)
+│   ├── monitoring/                    # kube-prometheus-stack, ECK, fluent-bit
+│   │   ├── alertmanager-rules.yaml    # PodCrashLooping + app alerts
+│   │   └── ingress-monitoring.yaml    # /grafana /prometheus /elasticsearch
+│   ├── app/                           # Deployment, Service, Ingress, HPA, PDB
+│   └── webhook/                       # Admission webhook manifests + TLS setup
+├── webhook/                           # Go source: /validate /metrics, TLS
+├── jenkins/
+│   ├── Jenkinsfile.build              # Build + DockerHub push
+│   └── Jenkinsfile.deploy             # Ansible deploy + rollout verify
+├── step3-manifests/                   # Step 3: PriorityClass, canary, KEDA cron
+├── docs/design-answers/               # Step 3 & 4 written design documents
+└── [terraform/ gitops/ apps/]         # Bonus: GCP/GKE reference implementation
 ```
 
 ## Prerequisites
 
-| Tool | Version | Purpose |
-|------|---------|---------|
-| Terraform | >= 1.6 | Infrastructure provisioning |
-| Google Cloud SDK | latest | GCP authentication |
-| kubectl | >= 1.28 | Kubernetes CLI |
-| Helm | >= 3.13 | Chart packaging / templating |
-| ArgoCD CLI | >= 2.9 | GitOps management |
-| Docker | >= 24 | Container build |
+- Vagrant + VirtualBox
+- Ansible (`pip install ansible`)
+- kubectl, Helm 3
 
-## How to Provision Infrastructure
+## Quick Start
 
-### 1. Authenticate to GCP
+### 1. Spin up the cluster
 
 ```bash
-gcloud auth application-default login
-gcloud config set project YOUR_PROJECT_ID
+vagrant up
+# This creates 3 VMs and runs ansible/site.yml automatically
+
+# If running Ansible separately:
+ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml
 ```
 
-### 2. Create Terraform State Bucket
+### 2. Get kubeconfig
 
 ```bash
-gsutil mb -l europe-west1 gs://YOUR_PROJECT_ID-terraform-state
-gsutil versioning set on gs://YOUR_PROJECT_ID-terraform-state
+vagrant ssh master -c "cat ~/.kube/config" > ~/.kube/config-dreamgames
+export KUBECONFIG=~/.kube/config-dreamgames
+kubectl get nodes   # master, worker1, worker2 all Ready
 ```
 
-### 3. Update tfvars
-
-Edit `terraform/environments/dev/terraform.tfvars` and replace `YOUR_PROJECT_ID`.
-
-### 4. Run Terraform
+### 3. Install platform components (in order)
 
 ```bash
-cd terraform/environments/dev
-terraform init \
-  -backend-config="bucket=YOUR_PROJECT_ID-terraform-state" \
-  -backend-config="prefix=dev/terraform.tfstate"
-terraform plan -var-file=terraform.tfvars
-terraform apply -var-file=terraform.tfvars
+# MetalLB (LoadBalancer support)
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.3/config/manifests/metallb-native.yaml
+kubectl wait --for=condition=available deployment -n metallb-system controller --timeout=90s
+kubectl apply -f kubernetes/metallb/ipaddresspool.yaml
+
+# Ingress-NGINX
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  -n ingress-nginx --create-namespace \
+  -f kubernetes/ingress-nginx/values.yaml
+
+# ExternalDNS
+kubectl apply -f kubernetes/externaldns/rbac.yaml
+kubectl apply -f kubernetes/externaldns/deployment.yaml
+
+# Jenkins (Node 3 / worker2)
+kubectl apply -f kubernetes/jenkins/pv.yaml
+kubectl create secret generic jenkins-credentials \
+  --from-literal=admin-password=YOUR_PASS \
+  --from-literal=dockerhub-user=YOUR_USER \
+  --from-literal=dockerhub-token=YOUR_TOKEN \
+  --from-literal=github-user=YOUR_USER \
+  --from-literal=github-token=YOUR_TOKEN \
+  -n jenkins
+helm repo add jenkins https://charts.jenkins.io
+helm install jenkins jenkins/jenkins -n jenkins --create-namespace \
+  -f kubernetes/jenkins/values.yaml
+
+# Monitoring stack
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
+  -n monitoring --create-namespace \
+  -f kubernetes/monitoring/kube-prometheus-stack-values.yaml
+kubectl apply -f kubernetes/monitoring/alertmanager-rules.yaml
+kubectl apply -f kubernetes/monitoring/grafana-dashboards/
+
+# Elasticsearch (ECK)
+kubectl create -f https://download.elastic.co/downloads/eck/2.11.1/crds.yaml
+kubectl apply  -f https://download.elastic.co/downloads/eck/2.11.1/operator.yaml
+kubectl apply  -f kubernetes/monitoring/elasticsearch/eck-operator.yaml
+
+# Fluent-bit
+helm repo add fluent https://fluent.github.io/helm-charts
+helm install fluent-bit fluent/fluent-bit \
+  -n monitoring \
+  -f kubernetes/monitoring/fluent-bit/values.yaml
+
+# Monitoring ingress
+kubectl apply -f kubernetes/monitoring/ingress-monitoring.yaml
 ```
 
-Repeat for `staging` and `prod`.
-
-### 5. Get GKE Credentials
+### 4. Deploy application
 
 ```bash
-gcloud container clusters get-credentials dev-gke-cluster \
-  --region europe-west1 --project YOUR_PROJECT_ID
+# Namespaces
+kubectl apply -f kubernetes/namespaces/namespaces.yaml
+
+# Application manifests
+kubectl apply -f kubernetes/app/
+
+# Test
+curl http://app.example.com/api/echo?hello=world&foo=bar
+# Response: {"hello":"world","foo":"bar"}
 ```
 
-## How to Deploy Platform Components
-
-### Install ArgoCD
+### 5. Deploy webhook
 
 ```bash
-kubectl create namespace argocd
-kubectl apply -k gitops/argocd/install/
-kubectl wait --for=condition=available deployment -n argocd --all --timeout=180s
-```
+kubectl apply -f kubernetes/webhook/namespace.yaml
+kubectl apply -f kubernetes/webhook/configmap.yaml
+bash kubernetes/webhook/tls/generate-certs.sh
+kubectl apply -f kubernetes/webhook/deployment.yaml
+kubectl apply -f kubernetes/webhook/service.yaml
+kubectl apply -f kubernetes/webhook/validatingwebhookconfiguration.yaml
 
-### Install External Secrets Operator
-
-```bash
-helm repo add external-secrets https://charts.external-secrets.io
-helm upgrade --install external-secrets external-secrets/external-secrets \
-  -n external-secrets --create-namespace \
-  --set serviceAccount.annotations."iam\.gke\.io/gcp-service-account"=\
-"dev-eso-sa@YOUR_PROJECT_ID.iam.gserviceaccount.com"
-```
-
-### Configure ClusterSecretStore
-
-```bash
+# Test: deploy without resource requests → should be rejected
 kubectl apply -f - <<EOF
-apiVersion: external-secrets.io/v1beta1
-kind: ClusterSecretStore
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: gcp-secret-store
+  name: bad-deploy
+  namespace: app
 spec:
-  provider:
-    gcpsm:
-      projectID: YOUR_PROJECT_ID
-      auth:
-        workloadIdentity:
-          clusterLocation: europe-west1
-          clusterName: dev-gke-cluster
-          serviceAccountRef:
-            name: external-secrets
-            namespace: external-secrets
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bad
+  template:
+    metadata:
+      labels:
+        app: bad
+    spec:
+      containers:
+        - name: bad
+          image: nginx
+          # No resources → webhook rejects this
 EOF
 ```
 
-### Install KEDA (prod only)
+## Access URLs
 
-```bash
-helm repo add kedacore https://kedacore.github.io/charts
-helm upgrade --install keda kedacore/keda -n keda --create-namespace
-```
+After `/etc/hosts` entry: `192.168.56.200 app.example.com monitoring.example.com jenkins.example.com`
 
-### Bootstrap App of Apps
+| Service | URL |
+|---------|-----|
+| Application | http://app.example.com/api/echo?param=value |
+| Jenkins | http://192.168.56.201:8080 |
+| Grafana | http://monitoring.example.com/grafana |
+| Prometheus | http://monitoring.example.com/prometheus |
+| Elasticsearch | http://monitoring.example.com/elasticsearch |
 
-```bash
-kubectl apply -f gitops/argocd/projects/platform-project.yaml
-kubectl apply -f gitops/argocd/applications/app-of-apps.yaml
-```
-
-## How Application Deployment Works
-
-1. **Developer** pushes code to a feature branch.
-2. **GitLab CI** validates, lints, runs security scans, builds the Docker image, and pushes to Artifact Registry with a `git-sha` tag.
-3. **ArgoCD Image Updater** polls Artifact Registry (every 2 min), detects the new tag, and commits an updated image tag back to Git.
-4. **ArgoCD** detects the Git change and performs a Helm sync (rolling update, zero-downtime).
-5. On successful sync, **ArgoCD Notifications** posts a Slack message to `#deployments`.
-
-### Environment Promotion
+## CI/CD Flow
 
 ```
-dev (auto-sync, newest-build)
-  └──→ [CI passes, image tagged] ──→ staging (auto-sync, semver)
-                                         └──→ [manual review] ──→ prod (manual sync, digest)
+Developer pushes to GitHub
+    │
+    ▼
+Jenkins Build Pipeline (Jenkinsfile.build)
+  ① checkout → ② mvn test → ③ mvn package
+  ④ docker build → ⑤ docker push (DockerHub, tag: BUILD_NUM-GIT_SHA)
+    │
+    ▼
+Jenkins Deploy Pipeline (Jenkinsfile.deploy)
+  ① ansible-playbook deploy-app.yml -e image_tag=<tag>
+  ② kubectl rollout status (waits for zero-downtime rollout)
+  ③ smoke test: GET /api/echo → 200 OK
 ```
 
-## Image Update Flow
-
-| Environment | Strategy | Trigger |
-|-------------|----------|---------|
-| dev | `newest-build` | Any new image pushed |
-| staging | `semver` | Tagged releases (e.g. `v1.2.3`) |
-| prod | `digest` | Immutable SHA digest — verified by reviewer |
-
-ArgoCD Image Updater writes back via a Git commit to `values-*.yaml`, preserving full GitOps auditability.
-
-## Secret Management
-
-Secrets are **never** stored in Git. The flow:
-
-1. Create secret in **GCP Secret Manager**: `gcloud secrets create nodejs-express-prod/database-url --data-file=-`
-2. **ExternalSecret CR** (in Git) declares which Secret Manager keys to sync.
-3. **External Secrets Operator** authenticates via Workload Identity and materializes a Kubernetes Secret.
-4. The Helm `Deployment` mounts the secret via `envFrom.secretRef`.
-
-See `apps/nodejs-express/helm/templates/externalsecret.yaml` and `gitops/argocd/notifications/secret-reference.yaml`.
-
-## Scaling
-
-### HPA (CPU / Memory)
-
-Configured via `values.yaml` `autoscaling` block. Active in staging and prod. Scales between `minReplicas` and `maxReplicas` based on CPU utilization (default: 70%).
-
-### KEDA (Pub/Sub)
-
-Active in prod when `keda.enabled: true` (see `values-prod.yaml`). Scales based on unacknowledged message count in a GCP Pub/Sub subscription.
+### Zero-Downtime Deployment
 
 ```yaml
-# values-prod.yaml excerpt
-keda:
-  enabled: true
-  pubsub:
-    subscriptionName: nodejs-express-prod-sub
-    threshold: "50"      # scale up when > 50 unacknowledged msgs
-    minReplicas: 3
-    maxReplicas: 20
-    cooldownPeriod: 60
-    pollingInterval: 30
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1          # 1 extra pod spins up first
+    maxUnavailable: 0    # no pod removed until new one is Ready
++ readinessProbe: waits for Spring Boot readiness endpoint
++ lifecycle.preStop: sleep 5 (drains in-flight requests)
++ terminationGracePeriodSeconds: 30
 ```
 
-**KEDA vs HPA:** KEDA is preferred when the scaling signal is external (queue depth, event count) rather than resource consumption. Both cannot own the same Deployment simultaneously — the KEDA ScaledObject takes ownership of the HPA via the `transfer-hpa-ownership` annotation.
+## Application — Log Design (Step 1.7)
 
-## Security and Governance
+**Problem:** stdout logging blocks main thread, degrades throughput.
 
-| Control | Implementation |
-|---------|---------------|
-| Non-root containers | `securityContext.runAsNonRoot: true` (Kyverno enforced) |
-| No privilege escalation | `allowPrivilegeEscalation: false` (Kyverno enforced) |
-| Capability dropping | `capabilities.drop: [ALL]` |
-| Read-only root filesystem | `readOnlyRootFilesystem: true` (+ emptyDir /tmp) |
-| Image tag policy | `latest` blocked in staging/prod by Kyverno |
-| Resource limits | Required by Kyverno ClusterPolicy |
-| Network isolation | NetworkPolicy per-namespace (ingress-nginx + monitoring only) |
-| Pod Security Admission | Namespace labeled `enforce: restricted` |
-| GKE private nodes | No direct internet exposure of worker nodes |
-| Workload Identity | No service account key files; all GCP auth via WI |
-| Secret management | Zero secrets in Git; all via GCP Secret Manager + ESO |
-| Shielded nodes | Secure boot + integrity monitoring enabled |
-| Binary Authorization | Enforced in prod (PROJECT_SINGLETON_POLICY_ENFORCE) |
+**Solution:** Logback `AsyncAppender` wrapping `SizeAndTimeBasedRollingPolicy`.
+
+```
+Main thread → AsyncAppender (queue: 256, non-blocking)
+                   │ async, separate thread
+                   ▼
+           RollingFileAppender
+           /app/logs/app.2024-01-15.log
+           maxFileSize: 1GB
+           rotation: daily
+           totalSizeCap: 10GB
+```
+
+Config: `app/src/main/resources/logback-spring.xml`
+
+Fluent-bit reads from `/app/logs/*.log` (file input) and forwards to Elasticsearch.
+
+## Step 3 — Design Decisions
+
+See `docs/design-answers/` for full writeups with manifests and reviewer defenses:
+
+| Step | Topic | Doc |
+|------|-------|-----|
+| 3.1 | App X (HA) vs App Y (batch) on limited nodes | [step3-resource-management.md](docs/design-answers/step3-resource-management.md) |
+| 3.2 | Scheduled autoscaling before peak | [step3-autoscaling.md](docs/design-answers/step3-autoscaling.md) |
+| 3.3 | Canary deployment for critical apps | [step3-deployment-strategy.md](docs/design-answers/step3-deployment-strategy.md) |
+| 3.4 | DB replica scaling + cache pre-warm | [step3-database-scaling.md](docs/design-answers/step3-database-scaling.md) |
+
+## Step 4 — Design Decisions
+
+| Step | Topic | Doc |
+|------|-------|-----|
+| 4.1 | Move macOS CI/CD to cloud (AWS EC2 Mac) | [step4-cloud-cicd.md](docs/design-answers/step4-cloud-cicd.md) |
+| 4.2 | iOS build automation with fastlane | [step4-ios-automation.md](docs/design-answers/step4-ios-automation.md) |
+| 4.3 | AWS Kubernetes disaster recovery | [step4-aws-dr.md](docs/design-answers/step4-aws-dr.md) |
 
 ## Assumptions
 
-See [`docs/assumptions.md`](docs/assumptions.md) for the full list of 23 assumptions.
+- VMs have internet access for package downloads
+- DockerHub credentials stored in Jenkins Kubernetes Secrets
+- DNS resolution for `*.example.com` added to `/etc/hosts` on local machine
+- `master.ipv4_cidr_block` of 172.16.0.0/28 conflicts with no existing network
+- Elasticsearch runs with `xpack.security.enabled: false` for simplicity (prod: TLS + auth)
+- Jenkins `mac1.metal` licensing not applicable in this local setup (addressed in Step 4 docs)
 
-Key assumptions:
-- GCP project ID must be set in each `terraform.tfvars` (replace `YOUR_PROJECT_ID`)
-- Terraform state bucket must be created before running `terraform init`
-- ArgoCD Image Updater needs write access to this repository (deploy key or PAT)
+## Kubernetes Cluster Spec
 
-## Trade-offs
+| Parameter | Value |
+|-----------|-------|
+| Kubernetes version | 1.28.x |
+| Container runtime | containerd 1.7 |
+| CNI | Calico v3.27 |
+| Pod CIDR | 10.244.0.0/16 (custom) |
+| Service CIDR | 10.96.0.0/12 (custom) |
+| LoadBalancer | MetalLB v0.14 (192.168.56.200-220) |
+| Node OS | Ubuntu 22.04 |
 
-See [`docs/tradeoffs.md`](docs/tradeoffs.md) for 10 architectural decision records covering:
-single vs. multi-cluster, Helm vs. Kustomize, ESO vs. Vault, KEDA vs. HPA, Kyverno vs. Gatekeeper, and more.
+## Notes Section Requirements Coverage
 
-## Future Improvements
-
-- [ ] Multi-cluster ArgoCD setup for stronger environment isolation
-- [ ] Terragrunt for DRY environment configuration
-- [ ] Crossplane for Kubernetes-native infrastructure provisioning
-- [ ] VPN / Cloud Interconnect for fully private GKE endpoint
-- [ ] Istio service mesh for mTLS, traffic management, and observability
-- [ ] Automated cost reporting via GCP Billing export + BigQuery
-- [ ] SLO/SLA dashboard with Google Cloud Monitoring SLOs
-- [ ] Chaos engineering with Chaos Mesh or Litmus
-- [ ] GitLab environments + deployment tracking integration
-- [ ] OCI Helm chart storage in Artifact Registry
-
-## How to Explain in a Review
-
-> "This platform separates concerns across three layers: infrastructure (Terraform modules), platform (ArgoCD + ESO + KEDA), and application (Helm charts). Every environment difference is encoded in `values-<env>.yaml`, never in templates. Secrets never touch Git — they exist in Secret Manager and are bridged to Kubernetes via External Secrets Operator using Workload Identity, no static credentials anywhere. Autoscaling has two layers: HPA for CPU/memory, and KEDA for Pub/Sub event-driven scaling in production. ArgoCD Image Updater closes the GitOps loop by writing image tag changes back to Git, keeping the repository the single source of truth. Kyverno policies enforce security baselines at admission time so they can't be accidentally bypassed."
+| Requirement | Coverage |
+|-------------|---------|
+| Production-ready K8s cluster | kubeadm 1.28, Calico, private network, MetalLB |
+| Jenkins deployment | Helm, JCasC, Node 3 nodeSelector, PVC, LoadBalancer |
+| Prometheus, Grafana, ES, fluent-bit, AlertManager | kube-prometheus-stack + ECK + fluent-bit Helm |
+| Application build stages | Jenkinsfile.build (test → build → docker → push) |
+| Application deployment with Ansible | Jenkinsfile.deploy → deploy-app.yml |

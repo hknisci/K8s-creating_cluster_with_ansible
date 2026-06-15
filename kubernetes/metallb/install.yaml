@@ -1,0 +1,11 @@
+# MetalLB v0.14 - required for LoadBalancer services in bare-metal/Vagrant clusters
+# Install: kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.3/config/manifests/metallb-native.yaml
+# Then apply ipaddresspool.yaml
+#
+# Reference manifest for review:
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: metallb-system
+  labels:
+    app: metallb

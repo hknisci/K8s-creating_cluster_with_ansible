@@ -1,0 +1,63 @@
+---
+- name: Check if cluster is already initialized
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubeadm_conf
+
+- name: Initialize Kubernetes cluster
+  command: >
+    kubeadm init
+    --apiserver-advertise-address={{ api_server_address }}
+    --pod-network-cidr={{ pod_cidr }}
+    --service-cidr={{ service_cidr }}
+    --kubernetes-version={{ kubernetes_version }}
+    --node-name=master
+  when: not kubeadm_conf.stat.exists
+  register: kubeadm_init
+
+- name: Create .kube directory for vagrant user
+  file:
+    path: /home/vagrant/.kube
+    state: directory
+    owner: vagrant
+    group: vagrant
+    mode: '0755'
+
+- name: Copy admin.conf to vagrant user
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /home/vagrant/.kube/config
+    remote_src: true
+    owner: vagrant
+    group: vagrant
+    mode: '0600'
+
+- name: Install Calico CNI
+  become: false
+  command: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+
+- name: Wait for master node to be Ready
+  become: false
+  command: kubectl wait node master --for=condition=Ready --timeout=300s
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+
+- name: Get join command
+  command: kubeadm token create --print-join-command
+  register: join_command
+
+- name: Save join command to file
+  copy:
+    content: "{{ join_command.stdout }}"
+    dest: /tmp/kubeadm-join.sh
+    mode: '0755'
+
+- name: Fetch join command to local
+  fetch:
+    src: /tmp/kubeadm-join.sh
+    dest: /tmp/kubeadm-join.sh
+    flat: true
