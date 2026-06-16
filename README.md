@@ -12,24 +12,28 @@ Developer
     │ git push
     ▼
 GitHub → Jenkins (Node 3, worker2)
-    ├── Jenkinsfile.build   → Docker build → DockerHub
-    └── Jenkinsfile.deploy  → Ansible → kubectl apply
+    ├── Jenkinsfile.build   → mvn test → docker build → Trivy scan → DockerHub
+    └── Jenkinsfile.deploy  → Ansible → kubectl apply → rollout verify → smoke test
                                     │
                     ┌───────────────▼──────────────────┐
                     │         Kubernetes Cluster        │
-                    │  (kubeadm 1.28, Calico, MetalLB)  │
+                    │  (kubeadm 1.32, Calico, MetalLB)  │
                     │                                   │
                     │  ┌──────────────────────────┐     │
                     │  │  app namespace            │     │
                     │  │  query-param-app (4 pods) │     │
                     │  │  → worker1 + worker2      │     │
                     │  │  → Nginx Ingress          │     │
+                    │  │  → NetworkPolicy (default │     │
+                    │  │    deny, allow ingress-   │     │
+                    │  │    nginx + monitoring)    │     │
                     │  └──────────────────────────┘     │
                     │                                   │
                     │  monitoring: Prometheus, Grafana  │
                     │             ES, fluent-bit        │
                     │  jenkins:   Node 3 only, PVC      │
                     │  webhook-system: admission webhook│
+                    │  PSA: restricted/baseline on all  │
                     └───────────────────────────────────┘
 ```
 
@@ -324,24 +328,113 @@ See `docs/design-answers/` for full writeups with manifests and reviewer defense
 
 | Parameter | Value |
 |-----------|-------|
-| Kubernetes version | 1.28.x |
-| Container runtime | containerd 1.7 |
-| CNI | Calico v3.27 |
+| Kubernetes version | 1.32.x |
+| Container runtime | containerd 1.7.23 |
+| CNI | Calico v3.29.1 |
 | Pod CIDR | 10.244.0.0/16 |
 | Service CIDR | 10.96.0.0/12 |
 | LoadBalancer | MetalLB v0.14 (192.168.56.200-220) |
 | Node OS | Ubuntu 22.04 |
 | Jenkins node | worker2 (Node 3), hostPath PV, 20Gi |
+| Pod Security Admission | app/webhook-system: restricted; monitoring/jenkins: baseline |
 
 ## Requirements Coverage
 
 | Requirement | Coverage |
 |-------------|---------|
-| Production-ready K8s cluster | kubeadm 1.28, Calico, private network, MetalLB |
+| Production-ready K8s cluster | kubeadm 1.32, Calico, private network, MetalLB |
 | Jenkins deployment | Helm, JCasC, Node 3 nodeSelector, PVC, LoadBalancer |
 | Prometheus, Grafana, ES, fluent-bit, AlertManager | kube-prometheus-stack + ECK + fluent-bit Helm |
-| Application build stages | Jenkinsfile.build (test → build → docker → push) |
+| Application build stages | Jenkinsfile.build (test → Trivy scan → docker → push) |
 | Application deployment with Ansible | Jenkinsfile.deploy → ansible/deploy-app.yml |
-| Async log design | Logback AsyncAppender + SizeAndTimeBasedRollingPolicy |
-| Custom admission webhook | Go, /validate (TLS), /metrics (HTTP), ConfigMap allow-list |
+| Async log design | Logback AsyncAppender + SizeAndTimeBasedRollingPolicy + MDC requestId |
+| Custom admission webhook | Go, /validate (TLS), /metrics (HTTP), ConfigMap allow-list, initContainers check |
 | ExternalDNS | coredns provider with embedded etcd pod |
+| NetworkPolicy | Default-deny ingress+egress; app, webhook-system namespaces isolated |
+| Image security | No mutable :latest tag; Trivy HIGH/CRITICAL scan before push |
+
+## How to Verify
+
+Run `make verify` after the cluster is up. It checks nodes, pod health, app smoke test, webhook rejection, HPA, and PDB in one command.
+
+Manual acceptance tests per step:
+
+**Step 1 — Cluster:**
+```bash
+kubectl get nodes                        # master, worker1, worker2 — all Ready
+curl 'http://app.example.com/api/echo?hello=world'  # → {"hello":"world"}
+cd app && mvn clean test                 # unit tests pass
+```
+
+**Step 2 — Rolling update (zero downtime):**
+```bash
+# Update image tag in deployment.yaml, then:
+kubectl apply -f kubernetes/app/deployment.yaml
+kubectl rollout status deployment/query-param-app -n app
+# While rolling: curl loop should see no connection errors
+```
+
+**Webhook:**
+```bash
+kubectl apply -f test/bad-deploy.yaml 2>&1 | grep -i "rejected\|denied"
+# Must print: admission webhook rejected — missing resource requests
+```
+
+**Monitoring:**
+```bash
+curl http://monitoring.example.com/prometheus/-/healthy   # 200 OK
+curl http://monitoring.example.com/grafana/api/health     # {"database":"ok"}
+kubectl get prometheusrule -n monitoring                  # dreamgames-app-alerts
+```
+
+**Request correlation:**
+```bash
+curl -v http://app.example.com/api/echo?x=1 2>&1 | grep X-Request-Id
+# Response header: X-Request-Id: <12-char hex>
+```
+
+## How to Destroy
+
+```bash
+vagrant destroy -f
+
+# Remove kubeconfig
+rm ~/.kube/config-dreamgames
+unset KUBECONFIG
+
+# Remove /etc/hosts entries added in setup
+sudo sed -i '/app.example.com\|monitoring.example.com\|jenkins.example.com/d' /etc/hosts
+```
+
+## Known Limitations
+
+| Limitation | Impact | Mitigation in real prod |
+|-----------|--------|------------------------|
+| Single control plane (no HA) | Master failure = cluster down | 3 control plane nodes + stacked/external etcd |
+| Vagrant/VirtualBox only | MetalLB IP pool 192.168.56.x only reachable from host | Cloud LB (AWS ELB, GCP GLBC) in real infra |
+| Self-signed TLS certs | Browser warnings; curl needs `-k` | cert-manager + Let's Encrypt or corporate CA |
+| ExternalDNS uses embedded single-node etcd | etcd pod failure = DNS loss | Managed DNS (Route53, Cloudflare) in prod |
+| K8s 1.32 — active support ends ~mid 2026 | Will need upgrade | Upgrade to 1.34/1.35/1.36 per [upgrade strategy](docs/upgrade-strategy.md) |
+| Jenkins on single worker2 node | Jenkins failure = no CI | Jenkins HA or cloud CI (GitHub Actions, GitLab CI) |
+| No etcd backup configured | Control plane data loss on master failure | Scheduled etcd snapshots to object storage |
+
+## Why This Design
+
+**kubeadm vs kubespray / k3s:**
+kubeadm matches what production on-prem/bare-metal teams actually use; it exposes every control plane parameter explicitly (audit logs, OIDC, encryption at rest). kubespray adds abstraction cost; k3s hides too much for a case study that requires demonstrating deep K8s knowledge.
+
+**MetalLB vs NodePort / ExternalIPs:**
+MetalLB gives a realistic LoadBalancer IP that mirrors cloud behavior. NodePort requires port management; ExternalIPs are static and not HA. This lets Jenkins deploy via a single stable IP exactly like a cloud LB.
+
+**ECK vs Helm Elasticsearch chart:**
+ECK (Elastic Cloud on Kubernetes) handles rolling upgrades, TLS, and keystore management automatically. The community Helm chart requires manual cert rotation and has no operator-level health management.
+
+**Go webhook vs OPA/Kyverno/VAP:**
+A hand-written Go webhook demonstrates admission controller internals (TLS, AdmissionReview wire format, caBundle patching). OPA/Kyverno would be the production choice for policy-as-code at scale, but they hide the mechanism the case study is testing.
+
+**KEDA CronTrigger vs CronJob patching:**
+KEDA integrates with HPA and Kubernetes autoscaling primitives. CronJob patching (kubectl patch deployment) is fragile and doesn't interact with the existing HPA min/max replicas correctly.
+
+## Upgrade Strategy
+
+See [docs/upgrade-strategy.md](docs/upgrade-strategy.md) for the full one-minor-at-a-time procedure, version skew policy, etcd backup steps, and Calico compatibility matrix.
