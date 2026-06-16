@@ -9,6 +9,8 @@ spring:
     timeout-per-shutdown-phase: 30s
 
 management:
+  server:
+    port: 9090
   endpoints:
     web:
       exposure:
@@ -17,7 +19,7 @@ management:
     health:
       probes:
         enabled: true
-      show-details: always
+      show-details: when-authorized
   health:
     livenessState:
       enabled: true

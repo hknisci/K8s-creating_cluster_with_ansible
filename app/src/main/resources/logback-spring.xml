@@ -2,17 +2,27 @@
 <configuration>
     <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="app"/>
 
-    <!-- Console appender (kept for container compatibility) -->
+    <!-- Console appender (non-prod and for stdout baseline) -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] [%X{requestId}] %-5level %logger{36} - %msg%n</pattern>
         </encoder>
     </appender>
 
-    <!-- Rolling file appender: max 1GB per file, daily rotation -->
+    <!-- Rolling file appender: max 1GB per file, daily rotation, JSON format with requestId -->
     <appender name="ROLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>/app/logs/${APP_NAME}.log</file>
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+            <includeMdcKeyName>requestId</includeMdcKeyName>
+            <fieldNames>
+                <timestamp>@timestamp</timestamp>
+                <message>message</message>
+                <logger>logger</logger>
+                <thread>thread</thread>
+                <levelValue>[ignore]</levelValue>
+            </fieldNames>
+            <customFields>{"app":"${APP_NAME}"}</customFields>
+        </encoder>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>/app/logs/${APP_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
             <maxFileSize>1GB</maxFileSize>
@@ -21,7 +31,7 @@
         </rollingPolicy>
     </appender>
 
-    <!-- Async wrapper: non-blocking, queue size 256, no performance hit on main thread -->
+    <!-- Async wrapper: non-blocking, queue 256, no log loss (discardingThreshold=0) -->
     <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="ROLLING_FILE"/>
         <queueSize>256</queueSize>

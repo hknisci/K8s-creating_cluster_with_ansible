@@ -24,7 +24,7 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/path: "/actuator/prometheus"
-        prometheus.io/port: "8080"
+        prometheus.io/port: "9090"
     spec:
       serviceAccountName: query-param-app
       # Graceful shutdown
@@ -59,6 +59,9 @@ spec:
             - name: http
               containerPort: 8080
               protocol: TCP
+            - name: management
+              containerPort: 9090
+              protocol: TCP
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: "prod"
@@ -75,7 +78,7 @@ spec:
           readinessProbe:
             httpGet:
               path: /actuator/health/readiness
-              port: 8080
+              port: 9090
             initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 3
@@ -84,7 +87,7 @@ spec:
           livenessProbe:
             httpGet:
               path: /actuator/health/liveness
-              port: 8080
+              port: 9090
             initialDelaySeconds: 30
             periodSeconds: 20
             failureThreshold: 3
@@ -92,7 +95,7 @@ spec:
           startupProbe:
             httpGet:
               path: /actuator/health/liveness
-              port: 8080
+              port: 9090
             failureThreshold: 10
             periodSeconds: 10
           securityContext:
