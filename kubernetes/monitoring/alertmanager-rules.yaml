@@ -23,6 +23,7 @@ spec:
             description: >
               Pod {{ $labels.namespace }}/{{ $labels.pod }} container {{ $labels.container }}
               has restarted {{ $value }} times in the last 5 minutes.
+            runbook: "kubectl logs -n {{ $labels.namespace }} {{ $labels.pod }} --previous"
 
         - alert: PodNotReady
           expr: |
@@ -33,6 +34,7 @@ spec:
           annotations:
             summary: "Pod {{ $labels.pod }} is not ready"
             description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been not ready for > 5 minutes."
+            runbook: "kubectl describe pod -n {{ $labels.namespace }} {{ $labels.pod }}"
 
         - alert: DeploymentReplicasMismatch
           expr: |
@@ -44,6 +46,7 @@ spec:
           annotations:
             summary: "Deployment {{ $labels.deployment }} replicas mismatch"
             description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has desired replicas != available replicas."
+            runbook: "kubectl rollout status deployment/{{ $labels.deployment }} -n {{ $labels.namespace }}"
 
     - name: application-metrics
       rules:
@@ -58,6 +61,31 @@ spec:
           annotations:
             summary: "High p95 latency on {{ $labels.uri }}"
             description: "95th percentile latency is {{ $value }}s for {{ $labels.uri }}"
+            runbook: "Check JVM heap, GC pauses, downstream dependencies"
+
+        - alert: HighErrorRate
+          expr: |
+            rate(http_server_requests_seconds_count{namespace="app",status=~"5.."}[5m])
+            / rate(http_server_requests_seconds_count{namespace="app"}[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Error rate > 5% on {{ $labels.uri }}"
+            description: "Error rate is {{ $value | humanizePercentage }} for {{ $labels.uri }}"
+            runbook: "kubectl logs -n app -l app=query-param-app --tail=100"
+
+        - alert: HPAMaxedOut
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="app"}
+            == kube_horizontalpodautoscaler_spec_max_replicas{namespace="app"}
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "HPA {{ $labels.horizontalpodautoscaler }} at maximum replicas"
+            description: "HPA has been at max replicas for 5m — may need to raise maxReplicas or investigate load."
+            runbook: "kubectl describe hpa -n app && kubectl top pods -n app"
 
     - name: node-health
       rules:
@@ -70,6 +98,7 @@ spec:
           annotations:
             summary: "High CPU on node {{ $labels.node }}"
             description: "Node {{ $labels.node }} CPU usage is above 85%."
+            runbook: "kubectl top pods -A --sort-by=cpu"
 
         - alert: NodeHighMemory
           expr: |
@@ -79,3 +108,53 @@ spec:
             severity: warning
           annotations:
             summary: "High memory usage on {{ $labels.instance }}"
+            description: "Node {{ $labels.instance }} memory usage > 85%."
+            runbook: "kubectl top pods -A --sort-by=memory"
+
+        - alert: NodeDiskPressure
+          expr: |
+            kube_node_status_condition{condition="DiskPressure",status="true"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Node {{ $labels.node }} has disk pressure"
+            description: "Node {{ $labels.node }} is under disk pressure. Pods may be evicted."
+            runbook: "df -h on node; kubectl describe node {{ $labels.node }}"
+
+    - name: storage
+      rules:
+        - alert: PVCNearFull
+          expr: |
+            kubelet_volume_stats_used_bytes / kubelet_volume_stats_capacity_bytes > 0.85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }} is 85% full"
+            description: "PVC {{ $labels.namespace }}/{{ $labels.persistentvolumeclaim }} usage > 85%."
+            runbook: "Review log rotation and cleanup old files"
+
+    - name: elasticsearch
+      rules:
+        - alert: ElasticsearchDiskHigh
+          expr: |
+            elasticsearch_filesystem_data_available_bytes
+            / elasticsearch_filesystem_data_size_bytes < 0.15
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Elasticsearch disk < 15% free"
+            description: "Elasticsearch node has less than 15% free disk. Indexing will stop at 10%."
+            runbook: "Apply ILM policy or delete old indices"
+
+        - alert: ElasticsearchClusterRed
+          expr: elasticsearch_cluster_health_status{color="red"} == 1
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Elasticsearch cluster status is RED"
+            description: "One or more primary shards are unassigned. Data loss may have occurred."
+            runbook: "kubectl logs -n monitoring -l elasticsearch.k8s.elastic.co/cluster-name=elasticsearch"
