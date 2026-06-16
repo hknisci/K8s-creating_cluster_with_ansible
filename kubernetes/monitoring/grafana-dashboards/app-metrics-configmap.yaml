@@ -1,0 +1,216 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-app-metrics
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  app-metrics.json: |
+    {
+      "title": "query-param-app — RED Metrics",
+      "uid": "dreamgames-app",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "time": { "from": "now-1h", "to": "now" },
+      "tags": ["dreamgames", "app", "red"],
+      "templating": {
+        "list": [
+          {
+            "name": "namespace",
+            "type": "constant",
+            "current": { "value": "app" }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "title": "Request Rate (RPS)",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 0, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m])) by (uri)",
+              "legendFormat": "{{ uri }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps", "custom": { "lineWidth": 2 } }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Error Rate (5xx %)",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 0, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"app\",status=~\"5..\"}[2m])) / sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m])) * 100",
+              "legendFormat": "5xx %"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "thresholds": {
+                "steps": [
+                  { "value": 0, "color": "green" },
+                  { "value": 1, "color": "yellow" },
+                  { "value": 5, "color": "red" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "Latency Percentiles (p50 / p95 / p99)",
+          "type": "timeseries",
+          "gridPos": { "x": 16, "y": 0, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))",
+              "legendFormat": "p50"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))",
+              "legendFormat": "p95"
+            },
+            {
+              "expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "s", "custom": { "lineWidth": 2 } }
+          }
+        },
+        {
+          "id": 4,
+          "title": "JVM Heap Used / Max",
+          "type": "timeseries",
+          "gridPos": { "x": 0, "y": 8, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "sum(jvm_memory_used_bytes{namespace=\"app\",area=\"heap\"}) by (pod)",
+              "legendFormat": "used {{ pod }}"
+            },
+            {
+              "expr": "sum(jvm_memory_max_bytes{namespace=\"app\",area=\"heap\"}) by (pod)",
+              "legendFormat": "max {{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "bytes" }
+          }
+        },
+        {
+          "id": 5,
+          "title": "JVM GC Pause Duration (p95)",
+          "type": "timeseries",
+          "gridPos": { "x": 8, "y": 8, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(jvm_gc_pause_seconds_bucket{namespace=\"app\"}[2m])) by (le, action, cause))",
+              "legendFormat": "{{ action }} / {{ cause }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "s" }
+          }
+        },
+        {
+          "id": 6,
+          "title": "JVM Threads",
+          "type": "timeseries",
+          "gridPos": { "x": 16, "y": 8, "w": 8, "h": 8 },
+          "targets": [
+            {
+              "expr": "jvm_threads_live_threads{namespace=\"app\"}",
+              "legendFormat": "live {{ pod }}"
+            },
+            {
+              "expr": "jvm_threads_daemon_threads{namespace=\"app\"}",
+              "legendFormat": "daemon {{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short" }
+          }
+        },
+        {
+          "id": 7,
+          "title": "Pod Restart Count",
+          "type": "stat",
+          "gridPos": { "x": 0, "y": 16, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"app\"}[1h]))",
+              "legendFormat": "restarts (1h)"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "thresholds": {
+                "steps": [
+                  { "value": 0, "color": "green" },
+                  { "value": 1, "color": "yellow" },
+                  { "value": 5, "color": "red" }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 8,
+          "title": "HPA Current / Max Replicas",
+          "type": "stat",
+          "gridPos": { "x": 6, "y": 16, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"app\"}",
+              "legendFormat": "current"
+            },
+            {
+              "expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"app\"}",
+              "legendFormat": "max"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short" }
+          }
+        },
+        {
+          "id": 9,
+          "title": "CPU Usage (millicores)",
+          "type": "timeseries",
+          "gridPos": { "x": 12, "y": 16, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"app\",container=\"query-param-app\"}[2m])) by (pod) * 1000",
+              "legendFormat": "{{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "short" }
+          }
+        },
+        {
+          "id": 10,
+          "title": "Memory Usage (bytes)",
+          "type": "timeseries",
+          "gridPos": { "x": 18, "y": 16, "w": 6, "h": 4 },
+          "targets": [
+            {
+              "expr": "sum(container_memory_working_set_bytes{namespace=\"app\",container=\"query-param-app\"}) by (pod)",
+              "legendFormat": "{{ pod }}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "bytes" }
+          }
+        }
+      ]
+    }
