@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: resource-webhook
+  namespace: webhook-system
+  labels:
+    app: resource-webhook
+spec:
+  selector:
+    app: resource-webhook
+  ports:
+    - port: 443
+      targetPort: 8443
+      name: https

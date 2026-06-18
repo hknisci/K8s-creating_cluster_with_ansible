@@ -1,0 +1,81 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: dreamgames-app-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+    role: alert-rules
+spec:
+  groups:
+    - name: pod-health
+      interval: 30s
+      rules:
+        - alert: PodCrashLooping
+          expr: |
+            increase(kube_pod_container_status_restarts_total{namespace="app"}[5m]) > 0
+          for: 1m
+          labels:
+            severity: warning
+            namespace: app
+          annotations:
+            summary: "Pod {{ $labels.pod }} is crash looping"
+            description: >
+              Pod {{ $labels.namespace }}/{{ $labels.pod }} container {{ $labels.container }}
+              has restarted {{ $value }} times in the last 5 minutes.
+
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{condition="true", namespace="app"} == 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Pod {{ $labels.pod }} is not ready"
+            description: "Pod {{ $labels.namespace }}/{{ $labels.pod }} has been not ready for > 5 minutes."
+
+        - alert: DeploymentReplicasMismatch
+          expr: |
+            kube_deployment_spec_replicas{namespace="app"}
+            != kube_deployment_status_replicas_available{namespace="app"}
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Deployment {{ $labels.deployment }} replicas mismatch"
+            description: "Deployment {{ $labels.namespace }}/{{ $labels.deployment }} has desired replicas != available replicas."
+
+    - name: application-metrics
+      rules:
+        - alert: HighRequestLatency
+          expr: |
+            histogram_quantile(0.95,
+              rate(http_server_requests_seconds_bucket{namespace="app"}[5m])
+            ) > 1.0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High p95 latency on {{ $labels.uri }}"
+            description: "95th percentile latency is {{ $value }}s for {{ $labels.uri }}"
+
+    - name: node-health
+      rules:
+        - alert: NodeHighCPU
+          expr: |
+            100 - (avg by (node) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High CPU on node {{ $labels.node }}"
+            description: "Node {{ $labels.node }} CPU usage is above 85%."
+
+        - alert: NodeHighMemory
+          expr: |
+            (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "High memory usage on {{ $labels.instance }}"

@@ -1,0 +1,20 @@
+---
+- name: Bootstrap all nodes
+  hosts: all
+  become: true
+  roles:
+    - common
+    - containerd
+    - kubeadm
+
+- name: Initialize control plane
+  hosts: master
+  become: true
+  roles:
+    - master
+
+- name: Join worker nodes
+  hosts: workers
+  become: true
+  roles:
+    - worker

@@ -1,0 +1,145 @@
+# helm repo add jenkins https://charts.jenkins.io
+# helm install jenkins jenkins/jenkins -n jenkins -f values.yaml
+controller:
+  image: jenkins/jenkins
+  tag: "2.440.1-lts"
+
+  # Pin Jenkins to worker2 (Node 3) exclusively
+  nodeSelector:
+    kubernetes.io/hostname: worker2
+
+  # Jenkins Configuration as Code
+  JCasC:
+    defaultConfig: true
+    configScripts:
+      jenkins-config: |
+        jenkins:
+          systemMessage: "Dream Games - Managed Jenkins (JCasC)"
+          numExecutors: 0
+          agentProtocols:
+            - "JNLP4-connect"
+          securityRealm:
+            local:
+              allowsSignup: false
+              users:
+                - id: "admin"
+                  password: "${JENKINS_ADMIN_PASSWORD}"
+          authorizationStrategy:
+            loggedInUsersCanDoAnything:
+              allowAnonymousRead: false
+        tool:
+          maven:
+            installations:
+              - name: "maven-3.9"
+                properties:
+                  - installSource:
+                      installers:
+                        - maven:
+                            id: "3.9.6"
+          jdk:
+            installations:
+              - name: "jdk-21"
+                properties:
+                  - installSource:
+                      installers:
+                        - adoptOpenJdkInstaller:
+                            id: "jdk-21.0.2+13"
+        credentials:
+          system:
+            domainCredentials:
+              - credentials:
+                  - usernamePassword:
+                      id: "dockerhub-credentials"
+                      username: "${DOCKERHUB_USER}"
+                      password: "${DOCKERHUB_TOKEN}"
+                      description: "DockerHub credentials"
+                  - usernamePassword:
+                      id: "github-credentials"
+                      username: "${GITHUB_USER}"
+                      password: "${GITHUB_TOKEN}"
+                      description: "GitHub credentials"
+        unclassified:
+          location:
+            url: "http://jenkins.example.com"
+
+  installPlugins:
+    - git:latest
+    - workflow-aggregator:latest
+    - docker-workflow:latest
+    - ansible:latest
+    - kubernetes:latest
+    - credentials-binding:latest
+    - pipeline-stage-view:latest
+    - blueocean:latest
+    - prometheus:latest
+    - configuration-as-code:latest
+
+  serviceType: LoadBalancer
+  loadBalancerIP: "192.168.56.201"
+  servicePort: 8080
+
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+  podAnnotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/path: "/prometheus"
+    prometheus.io/port: "8080"
+
+  # Credentials via environment variables (set as K8s Secrets)
+  containerEnv:
+    - name: JENKINS_ADMIN_PASSWORD
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-credentials
+          key: admin-password
+    - name: DOCKERHUB_USER
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-credentials
+          key: dockerhub-user
+    - name: DOCKERHUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-credentials
+          key: dockerhub-token
+    - name: GITHUB_USER
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-credentials
+          key: github-user
+    - name: GITHUB_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: jenkins-credentials
+          key: github-token
+
+persistence:
+  enabled: true
+  storageClass: jenkins-local
+  accessMode: ReadWriteOnce
+  size: 20Gi
+
+serviceAccount:
+  create: true
+  name: jenkins
+
+rbac:
+  create: true
+  readSecrets: true
+
+agent:
+  enabled: true
+  namespace: jenkins
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi

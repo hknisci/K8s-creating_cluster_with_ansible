@@ -1,0 +1,24 @@
+---
+- name: Check if node already joined
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Copy join command from master
+  copy:
+    src: /tmp/kubeadm-join.sh
+    dest: /tmp/kubeadm-join.sh
+    mode: '0755'
+  when: not kubelet_conf.stat.exists
+
+- name: Join cluster
+  command: bash /tmp/kubeadm-join.sh
+  when: not kubelet_conf.stat.exists
+
+- name: Label worker nodes
+  delegate_to: master
+  become: false
+  command: "kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker --overwrite"
+  environment:
+    KUBECONFIG: /home/vagrant/.kube/config
+  ignore_errors: true

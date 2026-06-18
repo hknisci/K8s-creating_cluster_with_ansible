@@ -1,0 +1,22 @@
+# Helm values for ingress-nginx
+# helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
+# helm install ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx --create-namespace -f values.yaml
+controller:
+  replicaCount: 2
+  service:
+    type: LoadBalancer
+    loadBalancerIP: "192.168.56.200"
+  config:
+    use-forwarded-headers: "true"
+    proxy-body-size: "10m"
+  resources:
+    requests:
+      cpu: 100m
+      memory: 90Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true

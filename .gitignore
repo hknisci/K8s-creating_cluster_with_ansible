@@ -1,0 +1,45 @@
+# Terraform
+.terraform/
+.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+*.tfplan
+tfplan.binary
+tfplan.txt
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Sensitive files - never commit
+*.pem
+*.key
+*.p12
+*.pfx
+service-account.json
+credentials.json
+*-sa-key.json
+.env
+.env.*
+!.env.example
+
+# Node.js
+node_modules/
+npm-debug.log*
+coverage/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Java / Maven
+target/
+*.jar
+*.class
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

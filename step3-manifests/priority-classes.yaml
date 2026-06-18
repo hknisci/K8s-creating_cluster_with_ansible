@@ -1,0 +1,22 @@
+# Step 3.1: App X (real-time, HA) vs App Y (batch, preemptible)
+# PriorityClasses control which pods survive under resource pressure
+
+# App X: high-priority, can preempt lower priority pods
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: high-priority-realtime
+value: 1000
+globalDefault: false
+preemptionPolicy: PreemptLowerPriority
+description: "Real-time application - App X. Preempts batch workloads when resources are scarce."
+---
+# App Y: low-priority, can be killed to free resources for App X
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: low-priority-batch
+value: 100
+globalDefault: false
+preemptionPolicy: Never
+description: "Batch application - App Y. Can be preempted by higher priority workloads."
