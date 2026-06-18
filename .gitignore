@@ -33,6 +33,11 @@ dist/
 .DS_Store
 Thumbs.db
 
+# Java / Maven
+target/
+*.jar
+*.class
+
 # IDE
 .idea/
 .vscode/
