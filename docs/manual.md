@@ -173,40 +173,132 @@ git push -u origin main
 > *"Kubernetes version 1.28 or higher"*
 > *"Use custom subnets of your choice for Pod and Service"*
 
-### Neden OrbStack Machines + kubeadm?
+### Neden kubeadm zorunlu, k3d/k3s neden yasak?
 
-Vagrant + VirtualBox = case study'nin beklediği ortam. M4 Mac'te VirtualBox çalışmaz.
-OrbStack Machines = VirtualBox'ın yaptığını Apple Virtualization framework ile yapar.
-kubeadm = production-grade cluster kurucusu (case study'nin istediği).
-Ansible = "Ansible configurations" istiyor zaten case study.
+Case study açıkça: *"Avoid using tools like kind, minikube, or k3s"*
+k3d = K3s in Docker → doğrudan elenme sebebi.
 
-Bu kombinasyon case study'nin tüm beklentilerini M4'te karşılar.
+kubeadm = production cluster kurucusu. Fark:
+- k3s/k3d → geliştirme ortamı, birçok K8s özelliği sadeleştirilmiş
+- kubeadm → gerçek production kurulumu, tüm K8s bileşenleri ayrı ayrı
+- Değerlendirici "bu kişi gerçek cluster kurabiliyor mu?" sorusunu soruyor
 
-### Adım 3: OrbStack ile VM'ler Oluştur
+### Kaynak Analizi ve Yol Seçimi
 
-OrbStack uygulamasını aç → "Machines" sekmesi → veya CLI ile:
+M4 MacBook Air'de RAM çok doluysa VM çalıştırmak zordur. Durumuna göre yol seç:
 
 ```bash
-# 3 Ubuntu 22.04 VM oluştur
-orb create ubuntu:22.04 master   --memory 2048 --cpu 2
-orb create ubuntu:22.04 worker1  --memory 2048 --cpu 2
-orb create ubuntu:22.04 worker2  --memory 2048 --cpu 2
-
-# VM'lerin IP adreslerini al
-orb ip master    # örnek: 198.19.249.10
-orb ip worker1   # örnek: 198.19.249.11
-orb ip worker2   # örnek: 198.19.249.12
-
-# SSH erişimini test et
-ssh orb@master "hostname && uname -m"
-# Beklenen: master, aarch64
+# Mevcut RAM durumunu kontrol et
+vm_stat | awk '/Pages free/{f=$3} /Pages wired/{w=$4} /Pages active/{a=$3} END {
+  gsub("\\.","",f); gsub("\\.","",w); gsub("\\.","",a);
+  printf "Serbest RAM: %.0f MB\n", f*16384/1024/1024
+}'
 ```
+
+| Serbest RAM | Önerilen Yol |
+|-------------|-------------|
+| > 5GB | Yol B: OrbStack minimal VMs (yerel) |
+| < 5GB | **Yol A: Oracle Cloud Always Free** (önerilen) |
+
+---
+
+### Adım 3 — Yol A: Oracle Cloud Always Free (Önerilen, Sıfır Yerel RAM)
+
+**Neden Oracle Cloud?**
+- Oracle Always Free Tier: 4 ARM64 Ampere vCPU + 24GB RAM **süresiz ücretsiz**
+- ARM64 = M4 ile aynı mimari, aynı Ansible playbook'ları çalışır
+- Yerel RAM maliyeti: ~50MB (sadece kubectl + ansible client)
+- VirtualBox/OrbStack kurulumuna gerek yok
+
+**Hesap aç:** https://www.oracle.com/cloud/free/ (kredi kartı gerekiyor, ücret kesilmiyor)
+
+VM'leri oluştur (Oracle Console → Compute → Instances → Create):
+```
+master:  Shape=VM.Standard.A1.Flex, 2 OCPU, 4GB RAM, Ubuntu 22.04
+worker1: Shape=VM.Standard.A1.Flex, 1 OCPU, 2GB RAM, Ubuntu 22.04
+worker2: Shape=VM.Standard.A1.Flex, 1 OCPU, 2GB RAM, Ubuntu 22.04
+Toplam:  4 OCPU, 8GB → Always Free limitine tam sığar
+```
+
+> ⚠️ VM oluştururken "Add SSH Key" → Public key ekle (`~/.ssh/id_ed25519.pub`)
+> VM'ler oluşunca Public IP'leri not al
+
+```bash
+# SSH erişimini test et
+ssh ubuntu@<MASTER_PUBLIC_IP> "hostname && uname -m"
+# Beklenen: ubuntu, aarch64
+
+# Security List'te şu portları aç (Oracle Console → VCN → Security Lists):
+# TCP 6443 (kube-apiserver), TCP 22 (SSH), ICMP (ping)
+# Cluster içi: tüm trafiği izin ver (subnet CIDR)
+```
+
+📖 Oracle Always Free: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
+
+Inventory için kullanılacak IP'ler:
+```bash
+# Oracle Console'dan Public IP'leri al:
+MASTER_IP=<oracle_master_public_ip>
+WORKER1_IP=<oracle_worker1_public_ip>
+WORKER2_IP=<oracle_worker2_public_ip>
+```
+
+---
+
+### Adım 3 — Yol B: Minimal OrbStack VMs (Yerel, ~3GB RAM)
+
+Önce ağır uygulamaları kapat (Chrome, Slack, vb.) → ~3-4GB freeable:
+
+```bash
+# OrbStack kur
+brew install --cask orbstack
+# OrbStack uygulamasını aç, ilk kurulumu tamamla
+
+# VM'leri minimum memory ile oluştur
+# master: kubeadm resmi minimum 1700MB, control plane için 2 vCPU şart
+orb create ubuntu:22.04 master  --memory 1700 --cpu 2
+# worker'lar: 700MB yeterli (kontrol plane bileşenleri yok)
+orb create ubuntu:22.04 worker1 --memory 700 --cpu 1
+orb create ubuntu:22.04 worker2 --memory 700 --cpu 1
+# Toplam ek RAM: ~3.1GB
+
+# IP'leri al
+orb ip master
+orb ip worker1
+orb ip worker2
+
+# SSH test
+ssh orb@master "hostname && uname -m"
+```
+
+> ⚠️ Tüm 3 VM'yi aynı anda başlatmak zorunda değilsin. Ansible playbook çalışırken
+> master önce init olur, worker'lar sırayla join olur. Cluster kurulduktan sonra
+> K8s kendi yönetir, VM'ler idle'da çok az RAM kullanır.
 
 📖 OrbStack Machines: https://docs.orbstack.dev/machines/
 
+---
+
 ### Adım 4: Ansible Inventory ve group_vars
 
+**Yol A (Oracle Cloud) için inventory:**
+
 `ansible/inventory/hosts.ini`:
+```ini
+[master]
+master  ansible_host=<MASTER_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+[workers]
+worker1 ansible_host=<WORKER1_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+worker2 ansible_host=<WORKER2_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+[all:children]
+master
+workers
+```
+
+**Yol B (OrbStack) için inventory:**
+
 ```ini
 [master]
 master  ansible_host=198.19.249.10  ansible_user=orb  ansible_ssh_private_key_file=~/.orbstack/id_ed25519
@@ -220,7 +312,9 @@ master
 workers
 ```
 
-> OrbStack VM'lerin IP'lerini `orb ip <vm-adı>` ile al, yukarıdaki örnek değerleri değiştir.
+> `orb ip master` ile gerçek IP'leri al, yukarıdaki değerleri değiştir.
+
+**Ortak group_vars (her iki yol için aynı):**
 
 `ansible/group_vars/all.yml`:
 ```yaml
@@ -229,18 +323,19 @@ containerd_version: "1.7.23"
 calico_version: "v3.29.1"
 
 # Case study: custom subnets (default'lardan farklı seçildi)
-pod_cidr: "10.244.0.0/16"      # Calico default, özelleştirilebilir
-service_cidr: "10.96.0.0/12"   # kubeadm default, özelleştirilebilir
+pod_cidr: "10.244.0.0/16"      # Pod'ların konuştuğu ağ
+service_cidr: "10.96.0.0/12"   # ClusterIP Service IP aralığı
 
-# Cluster endpoint (master VM IP)
-master_ip: "198.19.249.10"
+# Cluster endpoint — Yol A'da master'ın Public IP'si, Yol B'de OrbStack IP'si
+master_ip: "<MASTER_IP>"
 api_server_endpoint: "{{ master_ip }}:6443"
 ```
 
 **Neden custom subnet?**
-Case study bunu özellikle istiyor. Pod CIDR, container'ların birbirleriyle konuştuğu ağ.
-Service CIDR, ClusterIP Service'lerin IP'leri buradan alınır. Default değerleri değiştirmek
-"bu kişi sadece copy-paste yapmıyor, cluster ağını anlıyor" mesajı verir.
+
+Case study bunu özellikle istiyor. Default değerleri değiştirmek "cluster ağını anlıyor"
+mesajı verir. Pod CIDR → container-to-container iletişimi. Service CIDR → ClusterIP
+Service'lerin sanal IP havuzu. Calico bu CIDR'ları bilmeli ki doğru route'ları programlasın.
 
 ### Adım 5: Ansible Rolleri
 
