@@ -171,12 +171,14 @@ IP'leri al:
 ```bash
 multipass list
 # NAME      STATE     IPv4             IMAGE
-# master    Running   192.168.64.10    Ubuntu 22.04 LTS
-# worker1   Running   192.168.64.11    Ubuntu 22.04 LTS
-# worker2   Running   192.168.64.12    Ubuntu 22.04 LTS
+# master    Running   192.168.252.2    Ubuntu 22.04 LTS
+# worker1   Running   192.168.252.3    Ubuntu 22.04 LTS
+# worker2   Running   192.168.252.4    Ubuntu 22.04 LTS
+# ⚠️ IP'ler makineden makineye değişir — yukarıdaki senin GERÇEK IP'lerini göster!
 
-# SSH testi (cloud-init key ile)
-ssh ubuntu@192.168.64.10 "hostname && uname -m"   # → master, aarch64
+# SSH testi (cloud-init key ile) — KENDİ IP'LERİNİ YAZ:
+MASTER_IP=$(multipass info master | grep IPv4 | awk '{print $2}')
+ssh ubuntu@$MASTER_IP "hostname && uname -m"   # → master, aarch64
 ```
 
 📖 Multipass launch: https://multipass.run/docs/launch-command
@@ -470,32 +472,38 @@ gibi. Değerlendirici "bu kişi gerçek cluster kurabiliyor mu?" sorusuna bakıy
 
 #### Ansible Inventory ve Değişkenler
 
-`ansible/inventory/hosts.ini` (Multipass IP'leriyle):
+`ansible/inventory/hosts.ini` — IP'leri `multipass list` ile al, dosyayı düzenle:
+```bash
+# Gerçek IP'leri öğren
+multipass list
+# master    Running   192.168.252.2    ...
+# worker1   Running   192.168.252.3    ...
+# worker2   Running   192.168.252.4    ...
+```
+
 ```ini
 [master]
-master  ansible_host=192.168.64.10  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+master  ansible_host=192.168.252.2  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
 
 [workers]
-worker1 ansible_host=192.168.64.11  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
-worker2 ansible_host=192.168.64.12  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+worker1 ansible_host=192.168.252.3  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+worker2 ansible_host=192.168.252.4  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
 
-[all:children]
-master
-workers
+[all:vars]
+ansible_python_interpreter=/usr/bin/python3
 ```
-> `multipass list` çıktısındaki gerçek IP'leri yaz.
+> ⚠️ **ÖNEMLİ:** Yukarıdaki `192.168.252.x` örnektir. `multipass list` çıktında gördüğün gerçek IP'leri kullan. Farklı bir subnet atanmış olabilir (örn. `192.168.64.x`).
 
 `ansible/group_vars/all.yml`:
 ```yaml
-kubernetes_version: "1.32"
+kubernetes_version: "1.32.0"
 calico_version: "v3.29.1"
 
 # Case study 1.3b: custom subnets (default'lardan farklı seçildi)
 pod_cidr: "10.244.0.0/16"      # Pod-to-pod ağı
 service_cidr: "10.96.0.0/12"   # ClusterIP Service IP havuzu
 
-master_ip: "192.168.64.10"
-api_server_endpoint: "{{ master_ip }}:6443"
+api_server_address: "192.168.252.2"   # master VM IP'si
 ```
 
 **Neden custom subnet?** Case study özellikle istiyor. Default'u değiştirmek "cluster ağını
@@ -723,8 +731,9 @@ ansible all -i ansible/inventory/hosts.ini -m ping
 # Cluster kur (~10-15 dk)
 ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml -v
 
-# kubeconfig'i yerele kopyala
-ssh ubuntu@192.168.64.10 "cat ~/.kube/config" > ~/.kube/config-dreamgames
+# kubeconfig'i yerele kopyala (MASTER_IP = multipass info master | grep IPv4)
+MASTER_IP=$(multipass info master | grep IPv4 | awk '{print $2}')
+ssh ubuntu@$MASTER_IP "cat ~/.kube/config" > ~/.kube/config-dreamgames
 export KUBECONFIG=~/.kube/config-dreamgames
 echo "export KUBECONFIG=~/.kube/config-dreamgames" >> ~/.zshrc
 
@@ -762,7 +771,9 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-    - 192.168.64.200-192.168.64.220   # Multipass subnet aralığında boş IP'ler
+    - 192.168.252.200-192.168.252.220   # Multipass subnet aralığında boş IP'ler
+    # ⚠️ Subnet'in seni bildir: multipass list → master IP'nin ilk 3 oktetini kullan
+    # Örn. master 192.168.64.2 ise → 192.168.64.200-192.168.64.220
 ---
 apiVersion: metallb.io/v1beta1
 kind: L2Advertisement
@@ -772,7 +783,7 @@ metadata:
 spec:
   ipAddressPools: [local-pool]
 ```
-> IP aralığını `multipass list` subnet'ine göre ayarla (örn. 192.168.64.x).
+> IP aralığını `multipass list` subnet'ine göre ayarla (örn. `192.168.252.x` veya `192.168.64.x`).
 
 ```bash
 helm repo add metallb https://metallb.github.io/metallb && helm repo update
