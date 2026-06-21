@@ -1,125 +1,198 @@
 # Dream Games DevOps Case Study — Sıfırdan Çözüm Rehberi
 
-> **Hedef kitle:** 5-6 yıllık DevOps deneyimi. Her adımda **"Case study ne istiyor?"** →
-> **"Neden böyle yaptık?"** → **"Nasıl yapılır?"** akışı izlenir.
+> **Hedef kitle:** 5-6 yıllık DevOps deneyimi. Bu rehber case study PDF'inin **birebir sırasını**
+> izler: Prerequisites → Step 1 (madde 1–7) → Step 2 (madde 1–4) → Step 3 (madde 1–4) →
+> Step 4 (madde 1–3). Her bölümde **"Case study ne istiyor?"** → **"Neden böyle yaptık?"** →
+> **"Nasıl yapılır?"** akışı vardır.
 >
 > **MacBook Air M4 (Apple Silicon) uyumludur.** VirtualBox M-serisi Mac'te çalışmaz.
-> Bu rehber OrbStack Machines + Ansible + kubeadm kullanır — case study'nin beklediği
-> production-grade yaklaşım, M4 uyumlu VM sağlayıcısıyla.
+> Bu rehber **Multipass** (gerçek hafif VM + Apple Virtualization framework) + **Ansible** +
+> **kubeadm** kullanır — case study'nin beklediği production-grade yaklaşım, M4 uyumlu gerçek VM'lerle.
 >
-> ⚠️ **Güvenlik:** Şifre, token, Slack webhook, cloud credential asla dosyaya yazılmaz.
+> ⚠️ **Güvenlik:** Şifre, token, Slack webhook, cloud credential **asla** dosyaya yazılmaz.
 > Tüm secret'lar `kubectl create secret` veya environment variable ile yönetilir.
 >
-> ⚠️ **k3d/k3s KULLANMA:** Case study açıkça "Avoid tools like kind, minikube, or k3s"
-> diyor. k3d = K3s in Docker → elenme sebebi. Bu rehber kubeadm kullanır.
+> ⚠️ **k3d/k3s/kind/minikube YASAK:** Case study açıkça *"Avoid tools like kind, minikube, or k3s"*
+> diyor. k3d = K3s in Docker → elenme sebebi. Bu rehber **kubeadm** kullanır.
+>
+> ⚠️ **Kaynak modeli (2.9GB toplam):** master 1.5GB + worker1 700MB + worker2 700MB.
+> Tüm stack 2.9GB'a aynı anda sığmaz → **faz faz** ilerlenir (bkz. [Kaynak Stratejisi](#kaynak-stratejisi-faz-faz-kurulum)).
 
 ---
 
 ## İçindekiler
 
-- [Bölüm 0 — Case Study Analizi ve Araçlar](#bölüm-0--case-study-analizi-ve-araçlar)
-- [Bölüm 1 — Kendi Repo'nu Oluştur](#bölüm-1--kendi-repoyu-oluştur)
-- [Bölüm 2 — Kubernetes Cluster (M4 Mac + kubeadm)](#bölüm-2--kubernetes-cluster-m4-mac--kubeadm)
-- [Bölüm 3 — Network Altyapısı](#bölüm-3--network-altyapısı)
-- [Bölüm 4 — Uygulama ve Dockerfile](#bölüm-4--uygulama-ve-dockerfile)
-- [Bölüm 5 — Kubernetes Kaynakları](#bölüm-5--kubernetes-kaynakları)
-- [Bölüm 6 — Jenkins CI/CD](#bölüm-6--jenkins-cicd)
-- [Bölüm 7 — Monitoring Stack](#bölüm-7--monitoring-stack)
-- [Bölüm 8 — Log Aggregation](#bölüm-8--log-aggregation)
-- [Bölüm 9 — Admission Webhook](#bölüm-9--admission-webhook)
-- [Bölüm 10 — İleri Senaryolar (Step 3)](#bölüm-10--i̇leri-senaryolar-step-3)
-- [Bölüm 11 — Tasarım Soruları (Step 4)](#bölüm-11--tasarım-soruları-step-4)
-- [Bölüm 12 — Doğrulama ve Temizlik](#bölüm-12--doğrulama-ve-temizlik)
+- [Hazırlık: Gereksinimler, Araçlar ve Ortam](#hazırlık-gereksinimler-araçlar-ve-ortam)
+- [Step 1: Uygulama, Cluster ve Platform Kurulumu](#step-1-uygulama-cluster-ve-platform-kurulumu)
+  - [Step 1.1: Java Uygulaması](#step-11-java-uygulaması)
+  - [Step 1.2: Dockerfile (Multi-stage)](#step-12-dockerfile-multi-stage)
+  - [Step 1.3: Production Kubernetes Cluster](#step-13-production-kubernetes-cluster)
+  - [Step 1.4: ExternalDNS](#step-14-externaldns)
+  - [Step 1.5: Jenkins](#step-15-jenkins)
+  - [Step 1.6: Monitoring Stack](#step-16-monitoring-stack)
+  - [Step 1.7: Asenkron Dosya Logging](#step-17-asenkron-dosya-logging)
+- [Step 2: Deployment ve Pipeline'lar](#step-2-deployment-ve-pipelinelar)
+  - [Step 2.1: Uygulamayı Kubernetes'e Deploy Et](#step-21-uygulamayı-kubernetese-deploy-et)
+  - [Step 2.2: Build Pipeline](#step-22-build-pipeline)
+  - [Step 2.3: Deploy Pipeline (Ansible)](#step-23-deploy-pipeline-ansible)
+  - [Step 2.4: Validation Webhook](#step-24-validation-webhook)
+- [Step 3: Kaynak ve Ölçekleme Senaryoları](#step-3-kaynak-ve-ölçekleme-senaryoları)
+  - [Step 3.1: App X / App Y Kaynak Yönetimi](#step-31-app-x--app-y-kaynak-yönetimi)
+  - [Step 3.2: Zamanlı Ölçekleme + Node Scaling](#step-32-zamanlı-ölçekleme--node-scaling)
+  - [Step 3.3: Kritik Uygulama Deployment Stratejisi](#step-33-kritik-uygulama-deployment-stratejisi)
+  - [Step 3.4: Replica Veritabanı Ölçekleme](#step-34-replica-veritabanı-ölçekleme)
+- [Step 4: Tasarım Soruları](#step-4-tasarım-soruları)
+- [Doğrulama ve Temizlik](#doğrulama-ve-temizlik)
+- [Kapsam Özeti](#kapsam-özeti)
+- [Referanslar](#referanslar)
 
 ---
 
-## Bölüm 0 — Case Study Analizi ve Araçlar
+## Hazırlık: Gereksinimler, Araçlar ve Ortam
 
-### Case Study Neyi Değerlendiriyor?
+### Case Study Ne İstiyor? (Prerequisites)
 
-```
-Notes (PDF'den):
-  - Creating a production-ready Kubernetes cluster
-  - Platform deployments (Jenkins, Prometheus, Elasticsearch, Grafana) via Helm/Operator/manifest
-  - Application build stages
-  - Application deployment stages, including Ansible configurations
-```
+> *"Vagrant, VirtualBox, Vagrant Cloud Account, DockerHub for Image Registry, Github for SCM.
+> You can create 1 Master (Node 1), and 2 Worker Nodes (Node 2, Node 3) via Vagrantfile."*
 
-| Step | Gereksinim | Çözüm |
-|------|-----------|-------|
-| Step 1 | Java app + Dockerfile + K8s cluster + ExternalDNS + Jenkins + Monitoring + Async log | Bölüm 2–8 |
-| Step 2 | 4 pod HA + Build pipeline + **Ansible deploy pipeline** + Webhook | Bölüm 5–9 |
-| Step 3 | PriorityClass + KEDA + Canary + DB scaling | Bölüm 10 |
-| Step 4 | Cloud CI/CD + iOS automation + K8s DR | Bölüm 11 |
+Case study Vagrant + VirtualBox öneriyor. **VirtualBox Apple Silicon'da çalışmaz**, bu yüzden
+M4 Mac'te eşdeğer bir çözüme geçiyoruz: **Multipass** ile 3 gerçek Ubuntu VM (1 master + 2 worker).
+Mantık aynı — sadece VM sağlayıcı M4 uyumlusuyla değişti. Geriye kalan her şey (Ansible, kubeadm,
+DockerHub, GitHub) case study'deki gibi.
 
-### M4 Mac için K8s Cluster Seçimi
+**Neden Multipass, OrbStack/Vagrant değil?**
 
-**k3d/k3s → YASAK.** Case study:
-> *"Avoid using tools like kind, minikube, or k3s"*
+| Seçenek | M4 uyumu | kubeadm | Per-VM memory | Karar |
+|---------|----------|---------|---------------|-------|
+| VirtualBox + Vagrant | ❌ M-serisinde yok | — | — | Elenir |
+| OrbStack Machines | ✅ | ⚠️ Container tabanlı, nested containerd sorunlu | Paylaşımlı | Uygun değil |
+| **Multipass** | ✅ Apple Virtualization | ✅ Gerçek VM, sorunsuz | ✅ `--memory 1.5G` | **Seçildi** |
+| Lima | ✅ | ✅ | ✅ (YAML) | Alternatif |
 
-k3d = K3s in Docker. Kullanılırsa direkt elenirsin.
-
-**Doğru yaklaşım:** OrbStack Machines → 3 Ubuntu 22.04 VM → kubeadm
-- OrbStack, Apple Virtualization framework üzerinde native ARM64 VM çalıştırır
-- VirtualBox'ın yaptığını yapar, M4'te çalışır
-- Üstünde kubeadm tam çalışır → production-grade cluster
-- Ansible playbook'lar aynı — sadece VM sağlayıcı değişti
+Multipass gerçek hafif VM'ler üretir (container değil) → kubeadm + containerd + kubelet
+sorunsuz çalışır. Apple Virtualization framework kullandığı için M4-native ve hafiftir.
 
 ### Gerekli Araçlar
 
 ```bash
-# Homebrew
+# Homebrew (paket yöneticisi)
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# OrbStack (VM + Docker, M4 native)
-brew install --cask orbstack
-# Kurulumdan sonra OrbStack uygulamasını aç, ilk kurulumu tamamla
+# Multipass (M4-native gerçek VM)
+brew install --cask multipass
 
-# K8s araçları
+# K8s ve otomasyon araçları
 brew install kubectl helm ansible
 
-# Java (uygulama için)
+# Java + Maven (uygulama için)
 brew install --cask temurin@21    # OpenJDK 21
 brew install maven
 
-# İsteğe bağlı
-brew install k9s    # Terminal K8s UI
+# İsteğe bağlı: Go (webhook için), k9s (terminal K8s UI), Docker (local image build)
+brew install go k9s
+brew install --cask docker        # Docker Desktop (image build/test için)
 ```
 
 Versiyon kontrolü:
 ```bash
-kubectl version --client   # v1.28+
+multipass version          # 1.13+
+kubectl version --client   # v1.28+ (biz 1.32)
 helm version               # v3.14+
 ansible --version          # 2.15+
 java -version              # 21+
 mvn -version               # 3.9+
 ```
 
-📖 OrbStack: https://orbstack.dev
+📖 Multipass: https://multipass.run/docs
 📖 kubectl: https://kubernetes.io/docs/tasks/tools/install-kubectl-macos/
 📖 Ansible: https://docs.ansible.com/ansible/latest/installation_guide/intro_installation.html
 
----
+### Kaynak Stratejisi (Faz Faz Kurulum)
 
-## Bölüm 1 — Kendi Repo'nu Oluştur
+⚠️ **2.9GB toplam RAM ile tüm stack aynı anda çalışmaz.** Worker'ların toplam kapasitesi
+2 × 700MB = 1.4GB; bunun ~500MB'ı OS + kubelet + containerd + Calico + kube-proxy'ye gider.
+Geriye ~900MB workload kapasitesi kalır. Jenkins (~700MB) + Elasticsearch (~700MB) +
+Prometheus (~400MB) + 4 app pod (~512MB) toplamı bu bütçeyi kat kat aşar.
 
-### Adım 1: Git Repo ve Dizin Yapısı
+**Çözüm — faz faz ilerle:** Her bileşeni kur → çalıştığını **doğrula ve screenshot al** →
+bir sonrakine geçmeden RAM'i boşalt. Böylece case study'nin **her** gereksinimini kanıtlarsın,
+hepsini aynı anda ayakta tutmadan. Bu aynı zamanda DevOps olgunluğu gösterir (kaynak farkındalığı).
+
+| Faz | Bileşen | ~RAM | Faz sonunda |
+|-----|---------|------|-------------|
+| 1 | Cluster + Calico + MetalLB + Ingress + metrics-server | sistem | **Kalır** (temel altyapı) |
+| 2 | Uygulama (4 pod) | ~512MB | **Kalır** (çekirdek demo) |
+| 3 | ExternalDNS | ~50MB | Kalır (hafif) |
+| 4 | Jenkins + build/deploy pipeline | ~700MB | Doğrula → `helm uninstall jenkins` |
+| 5 | Monitoring (Prometheus+Grafana+AlertManager) | ~600MB | Doğrula → gerekirse uninstall |
+| 6 | Elasticsearch + fluent-bit | ~700MB | Doğrula → `kubectl delete elasticsearch` |
+| 7 | Webhook (2 pod) | ~80MB | Kalır (hafif) |
+| 8 | Step 3 manifest'leri | geçici | Doğrula → sil |
+
+> 💡 Ağır faz (Jenkins/Monitoring/ES) çalışırken uygulamayı geçici küçült:
+> `kubectl scale deployment query-param-app --replicas=1 -n app`
+> Faz bitince geri büyüt: `kubectl scale deployment query-param-app --replicas=4 -n app`
+
+### VM'leri Oluştur (master 1.5GB + 2× worker 700MB)
+
+Önce ağır uygulamaları kapat (Chrome, Slack, IDE) → ~3-4GB boşalt.
+
+**SSH anahtarı hazırla** (Ansible bağlantısı için):
+```bash
+# Yoksa oluştur
+[ -f ~/.ssh/id_ed25519 ] || ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519
+
+# Public key'i cloud-init dosyasına göm
+cat > /tmp/cloud-init.yaml << EOF
+ssh_authorized_keys:
+  - $(cat ~/.ssh/id_ed25519.pub)
+EOF
+```
+
+**VM'leri başlat** — memory değerleri tam istenildiği gibi:
+```bash
+# master: kubeadm control-plane → 2 vCPU şart, RAM 1.5G (resmi min 1700MB altında, bkz. not)
+multipass launch 22.04 --name master  --cpus 2 --memory 1.5G --disk 12G --cloud-init /tmp/cloud-init.yaml
+
+# worker'lar: kontrol-plane bileşeni yok → 700MB + 1 vCPU yeterli
+multipass launch 22.04 --name worker1 --cpus 1 --memory 700M --disk 8G  --cloud-init /tmp/cloud-init.yaml
+multipass launch 22.04 --name worker2 --cpus 1 --memory 700M --disk 8G  --cloud-init /tmp/cloud-init.yaml
+
+# Toplam ek RAM: 1.5 + 0.7 + 0.7 = 2.9GB
+```
+
+> ⚠️ **master 1.5GB notu:** kubeadm resmi minimumu 1700MB'dir. 1.5GB ile preflight check
+> hata verir → `--ignore-preflight-errors=Mem` ile bypass ediyoruz (Step 1.3 master role'ünde
+> hazır). Control plane idle'da ~1.2GB kullanır; 1.5GB demo için yeterli ama dardır. Master
+> kararsızsa (apiserver restart / NotReady) RAM'i yükselt:
+> `multipass stop master && multipass set local.master.memory=1700M && multipass start master`
+
+IP'leri al:
+```bash
+multipass list
+# NAME      STATE     IPv4             IMAGE
+# master    Running   192.168.64.10    Ubuntu 22.04 LTS
+# worker1   Running   192.168.64.11    Ubuntu 22.04 LTS
+# worker2   Running   192.168.64.12    Ubuntu 22.04 LTS
+
+# SSH testi (cloud-init key ile)
+ssh ubuntu@192.168.64.10 "hostname && uname -m"   # → master, aarch64
+```
+
+📖 Multipass launch: https://multipass.run/docs/launch-command
+
+### Kendi Repo'nu Oluştur
 
 ```bash
 mkdir dreamgames-case && cd dreamgames-case
-git init
-git branch -M main
+git init && git branch -M main
 
 mkdir -p app/src/main/{java/com/dreamgames/{controller,filter},resources}
 mkdir -p ansible/roles/{common,containerd,kubeadm,master,worker}/{tasks,templates,handlers}
 mkdir -p ansible/{group_vars,inventory}
-mkdir -p kubernetes/{namespaces,app,jenkins,webhook/tls,metallb,ingress-nginx}
+mkdir -p kubernetes/{namespaces,app,jenkins,webhook/tls,metallb,ingress-nginx,externaldns}
 mkdir -p kubernetes/monitoring/{grafana-dashboards,elasticsearch,fluent-bit}
-mkdir -p kubernetes/externaldns
-mkdir -p jenkins
-mkdir -p step3-manifests
-mkdir -p docs/design-answers
-mkdir -p webhook
+mkdir -p jenkins step3-manifests docs/design-answers webhook
 
 cat > .gitignore << 'EOF'
 target/
@@ -135,603 +208,45 @@ vendor/
 EOF
 ```
 
-Dizin yapısı ve mantığı:
+Dizin yapısı (case study mantığına göre):
 ```
 dreamgames-case/
-├── app/                    # Spring Boot uygulaması
-├── ansible/                # K8s cluster kurulum + deploy playbook'ları
-├── kubernetes/             # Tüm K8s manifest'leri (GitOps yaklaşımı)
-│   ├── app/                # Deployment, Service, Ingress, HPA, PDB, NetworkPolicy
-│   ├── jenkins/            # Jenkins PV, Helm values (Node 3 pin'li)
-│   ├── monitoring/         # kube-prometheus-stack + alerting + dashboards
-│   └── webhook/            # Admission webhook kaynakları
-├── jenkins/                # Jenkinsfile.build, Jenkinsfile.deploy (Ansible çağırır)
-├── step3-manifests/        # KEDA, Canary, PriorityClass
-└── docs/design-answers/    # Step 3-4 tasarım soruları yazılı yanıtlar
+├── app/                # Step 1.1, 1.2, 1.7 — Spring Boot uygulaması + Dockerfile + logback
+├── ansible/            # Step 1.3 — cluster kurulum; Step 2.3 — deploy playbook
+├── kubernetes/         # Tüm K8s manifest'leri (GitOps yaklaşımı)
+│   ├── app/            # Step 2.1 — Deployment, Service, Ingress, HPA, PDB, NetworkPolicy
+│   ├── externaldns/    # Step 1.4
+│   ├── jenkins/        # Step 1.5 — PV, Helm values (Node 3 pin'li)
+│   ├── monitoring/     # Step 1.6 — kube-prometheus-stack + ES + fluent-bit + alert + dashboard
+│   └── webhook/        # Step 2.4 — admission webhook kaynakları
+├── jenkins/            # Step 2.2, 2.3 — Jenkinsfile.build, Jenkinsfile.deploy (Ansible çağırır)
+├── step3-manifests/    # Step 3 — KEDA, Canary, PriorityClass
+└── docs/design-answers/# Step 3-4 tasarım soruları yazılı yanıtlar
 ```
-
-**GitOps Yaklaşımı:** Tüm manifest'ler Git'te. Değişiklik → `git push` → Ansible veya Jenkins deploy eder. ArgoCD gibi bir tool eklersen tam GitOps olur — case study bunu "highly desirable" olarak belirtmiş, eklemen puan kazandırır.
-
-### Adım 2: GitHub'a Push
 
 ```bash
 echo "# Dream Games DevOps Case Study" > README.md
-git add .
-git commit -m "chore: initial project structure"
+git add . && git commit -m "chore: initial project structure"
 git remote add origin https://github.com/<kullanici>/dreamgames-case.git
 git push -u origin main
 ```
 
 ---
 
-## Bölüm 2 — Kubernetes Cluster (M4 Mac + kubeadm)
+## Step 1: Uygulama, Cluster ve Platform Kurulumu
 
-### Case Study Ne İstiyor?
+### Step 1.1: Java Uygulaması
 
-> *"Set up a production-ready Kubernetes cluster using tools like Kubeadm, Kubespray, or similar."*
-> *"Avoid using tools like kind, minikube, or k3s"*
-> *"Kubernetes version 1.28 or higher"*
-> *"Use custom subnets of your choice for Pod and Service"*
-
-### Neden kubeadm zorunlu, k3d/k3s neden yasak?
-
-Case study açıkça: *"Avoid using tools like kind, minikube, or k3s"*
-k3d = K3s in Docker → doğrudan elenme sebebi.
-
-kubeadm = production cluster kurucusu. Fark:
-- k3s/k3d → geliştirme ortamı, birçok K8s özelliği sadeleştirilmiş
-- kubeadm → gerçek production kurulumu, tüm K8s bileşenleri ayrı ayrı
-- Değerlendirici "bu kişi gerçek cluster kurabiliyor mu?" sorusunu soruyor
-
-### Kaynak Analizi ve Yol Seçimi
-
-M4 MacBook Air'de RAM çok doluysa VM çalıştırmak zordur. Durumuna göre yol seç:
-
-```bash
-# Mevcut RAM durumunu kontrol et
-vm_stat | awk '/Pages free/{f=$3} /Pages wired/{w=$4} /Pages active/{a=$3} END {
-  gsub("\\.","",f); gsub("\\.","",w); gsub("\\.","",a);
-  printf "Serbest RAM: %.0f MB\n", f*16384/1024/1024
-}'
-```
-
-| Serbest RAM | Önerilen Yol |
-|-------------|-------------|
-| > 5GB | Yol B: OrbStack minimal VMs (yerel) |
-| < 5GB | **Yol A: Oracle Cloud Always Free** (önerilen) |
-
----
-
-### Adım 3 — Yol A: Oracle Cloud Always Free (Önerilen, Sıfır Yerel RAM)
-
-**Neden Oracle Cloud?**
-- Oracle Always Free Tier: 4 ARM64 Ampere vCPU + 24GB RAM **süresiz ücretsiz**
-- ARM64 = M4 ile aynı mimari, aynı Ansible playbook'ları çalışır
-- Yerel RAM maliyeti: ~50MB (sadece kubectl + ansible client)
-- VirtualBox/OrbStack kurulumuna gerek yok
-
-**Hesap aç:** https://www.oracle.com/cloud/free/ (kredi kartı gerekiyor, ücret kesilmiyor)
-
-VM'leri oluştur (Oracle Console → Compute → Instances → Create):
-```
-master:  Shape=VM.Standard.A1.Flex, 2 OCPU, 4GB RAM, Ubuntu 22.04
-worker1: Shape=VM.Standard.A1.Flex, 1 OCPU, 2GB RAM, Ubuntu 22.04
-worker2: Shape=VM.Standard.A1.Flex, 1 OCPU, 2GB RAM, Ubuntu 22.04
-Toplam:  4 OCPU, 8GB → Always Free limitine tam sığar
-```
-
-> ⚠️ VM oluştururken "Add SSH Key" → Public key ekle (`~/.ssh/id_ed25519.pub`)
-> VM'ler oluşunca Public IP'leri not al
-
-```bash
-# SSH erişimini test et
-ssh ubuntu@<MASTER_PUBLIC_IP> "hostname && uname -m"
-# Beklenen: ubuntu, aarch64
-
-# Security List'te şu portları aç (Oracle Console → VCN → Security Lists):
-# TCP 6443 (kube-apiserver), TCP 22 (SSH), ICMP (ping)
-# Cluster içi: tüm trafiği izin ver (subnet CIDR)
-```
-
-📖 Oracle Always Free: https://docs.oracle.com/en-us/iaas/Content/FreeTier/freetier_topic-Always_Free_Resources.htm
-
-Inventory için kullanılacak IP'ler:
-```bash
-# Oracle Console'dan Public IP'leri al:
-MASTER_IP=<oracle_master_public_ip>
-WORKER1_IP=<oracle_worker1_public_ip>
-WORKER2_IP=<oracle_worker2_public_ip>
-```
-
----
-
-### Adım 3 — Yol B: Minimal OrbStack VMs (Yerel, ~3GB RAM)
-
-Önce ağır uygulamaları kapat (Chrome, Slack, vb.) → ~3-4GB freeable:
-
-```bash
-# OrbStack kur
-brew install --cask orbstack
-# OrbStack uygulamasını aç, ilk kurulumu tamamla
-
-# VM'leri minimum memory ile oluştur
-# master: kubeadm resmi minimum 1700MB, control plane için 2 vCPU şart
-orb create ubuntu:22.04 master  --memory 1700 --cpu 2
-# worker'lar: 700MB yeterli (kontrol plane bileşenleri yok)
-orb create ubuntu:22.04 worker1 --memory 700 --cpu 1
-orb create ubuntu:22.04 worker2 --memory 700 --cpu 1
-# Toplam ek RAM: ~3.1GB
-
-# IP'leri al
-orb ip master
-orb ip worker1
-orb ip worker2
-
-# SSH test
-ssh orb@master "hostname && uname -m"
-```
-
-> ⚠️ Tüm 3 VM'yi aynı anda başlatmak zorunda değilsin. Ansible playbook çalışırken
-> master önce init olur, worker'lar sırayla join olur. Cluster kurulduktan sonra
-> K8s kendi yönetir, VM'ler idle'da çok az RAM kullanır.
-
-📖 OrbStack Machines: https://docs.orbstack.dev/machines/
-
----
-
-### Adım 4: Ansible Inventory ve group_vars
-
-**Yol A (Oracle Cloud) için inventory:**
-
-`ansible/inventory/hosts.ini`:
-```ini
-[master]
-master  ansible_host=<MASTER_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
-
-[workers]
-worker1 ansible_host=<WORKER1_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
-worker2 ansible_host=<WORKER2_PUBLIC_IP>  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
-
-[all:children]
-master
-workers
-```
-
-**Yol B (OrbStack) için inventory:**
-
-```ini
-[master]
-master  ansible_host=198.19.249.10  ansible_user=orb  ansible_ssh_private_key_file=~/.orbstack/id_ed25519
-
-[workers]
-worker1 ansible_host=198.19.249.11  ansible_user=orb  ansible_ssh_private_key_file=~/.orbstack/id_ed25519
-worker2 ansible_host=198.19.249.12  ansible_user=orb  ansible_ssh_private_key_file=~/.orbstack/id_ed25519
-
-[all:children]
-master
-workers
-```
-
-> `orb ip master` ile gerçek IP'leri al, yukarıdaki değerleri değiştir.
-
-**Ortak group_vars (her iki yol için aynı):**
-
-`ansible/group_vars/all.yml`:
-```yaml
-kubernetes_version: "1.32"
-containerd_version: "1.7.23"
-calico_version: "v3.29.1"
-
-# Case study: custom subnets (default'lardan farklı seçildi)
-pod_cidr: "10.244.0.0/16"      # Pod'ların konuştuğu ağ
-service_cidr: "10.96.0.0/12"   # ClusterIP Service IP aralığı
-
-# Cluster endpoint — Yol A'da master'ın Public IP'si, Yol B'de OrbStack IP'si
-master_ip: "<MASTER_IP>"
-api_server_endpoint: "{{ master_ip }}:6443"
-```
-
-**Neden custom subnet?**
-
-Case study bunu özellikle istiyor. Default değerleri değiştirmek "cluster ağını anlıyor"
-mesajı verir. Pod CIDR → container-to-container iletişimi. Service CIDR → ClusterIP
-Service'lerin sanal IP havuzu. Calico bu CIDR'ları bilmeli ki doğru route'ları programlasın.
-
-### Adım 5: Ansible Rolleri
-
-`ansible/site.yml`:
-```yaml
----
-- name: Common setup (tüm node'lar)
-  hosts: all
-  become: true
-  roles:
-    - common
-    - containerd
-
-- name: kubeadm kurulumu (tüm node'lar)
-  hosts: all
-  become: true
-  roles:
-    - kubeadm
-
-- name: Master node init
-  hosts: master
-  become: true
-  roles:
-    - master
-
-- name: Worker node join
-  hosts: workers
-  become: true
-  roles:
-    - worker
-```
-
-`ansible/roles/common/tasks/main.yml`:
-```yaml
----
-- name: Swap kapat (kubeadm gereksinimi)
-  command: swapoff -a
-
-- name: Swap kalıcı kapat
-  replace:
-    path: /etc/fstab
-    regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
-    replace: '# \1'
-
-- name: Kernel modülleri yükle (containerd için)
-  modprobe:
-    name: "{{ item }}"
-  loop:
-    - overlay
-    - br_netfilter
-
-- name: Kalıcı modül konfigürasyonu
-  copy:
-    dest: /etc/modules-load.d/k8s.conf
-    content: |
-      overlay
-      br_netfilter
-
-- name: Sysctl parametreleri (K8s networking için)
-  sysctl:
-    name: "{{ item.key }}"
-    value: "{{ item.value }}"
-    sysctl_set: true
-    state: present
-    reload: true
-  loop:
-    - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
-    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
-    - { key: "net.ipv4.ip_forward",                 value: "1" }
-```
-
-`ansible/roles/containerd/tasks/main.yml`:
-```yaml
----
-- name: containerd kur
-  apt:
-    name: "containerd={{ containerd_version }}*"
-    state: present
-    update_cache: true
-
-- name: containerd config dizini
-  file:
-    path: /etc/containerd
-    state: directory
-
-- name: Default config oluştur
-  shell: containerd config default > /etc/containerd/config.toml
-
-- name: SystemdCgroup aktif et (kubeadm gereksinimi)
-  replace:
-    path: /etc/containerd/config.toml
-    regexp: 'SystemdCgroup = false'
-    replace: 'SystemdCgroup = true'
-  notify: restart containerd
-
-- name: containerd'yi başlat
-  systemd:
-    name: containerd
-    enabled: true
-    state: started
-```
-
-`ansible/roles/containerd/handlers/main.yml`:
-```yaml
----
-- name: restart containerd
-  systemd:
-    name: containerd
-    state: restarted
-```
-
-`ansible/roles/kubeadm/tasks/main.yml`:
-```yaml
----
-- name: Kubernetes apt key ekle
-  apt_key:
-    url: https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key
-    state: present
-
-- name: Kubernetes repo ekle
-  apt_repository:
-    repo: "deb https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /"
-    state: present
-
-- name: kubeadm, kubelet, kubectl kur
-  apt:
-    name:
-      - "kubeadm"
-      - "kubelet"
-      - "kubectl"
-    state: present
-    update_cache: true
-
-- name: Paketleri hold et (otomatik upgrade'i engelle)
-  dpkg_selections:
-    name: "{{ item }}"
-    selection: hold
-  loop:
-    - kubeadm
-    - kubelet
-    - kubectl
-```
-
-`ansible/roles/master/tasks/main.yml`:
-```yaml
----
-- name: kubeadm config oluştur
-  template:
-    src: kubeadm-config.yaml.j2
-    dest: /tmp/kubeadm-config.yaml
-
-- name: Cluster zaten init edilmiş mi?
-  stat:
-    path: /etc/kubernetes/admin.conf
-  register: kubeconfig_exists
-
-- name: kubeadm init
-  command: kubeadm init --config=/tmp/kubeadm-config.yaml --upload-certs
-  when: not kubeconfig_exists.stat.exists
-  register: kubeadm_output
-
-- name: .kube dizini oluştur
-  file:
-    path: "{{ ansible_env.HOME }}/.kube"
-    state: directory
-
-- name: admin.conf kopyala
-  copy:
-    src: /etc/kubernetes/admin.conf
-    dest: "{{ ansible_env.HOME }}/.kube/config"
-    remote_src: true
-    owner: "{{ ansible_user_id }}"
-    mode: '0600'
-
-- name: Calico CNI kur
-  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
-  environment:
-    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
-  when: not kubeconfig_exists.stat.exists
-
-- name: Join command al
-  command: kubeadm token create --print-join-command
-  register: join_command
-  changed_when: false
-
-- name: Join command'ı dosyaya yaz (worker'lar okuyacak)
-  copy:
-    content: "{{ join_command.stdout }}"
-    dest: /tmp/join-command.sh
-    mode: '0755'
-```
-
-`ansible/roles/master/templates/kubeadm-config.yaml.j2`:
-```yaml
-apiVersion: kubeadm.k8s.io/v1beta4
-kind: ClusterConfiguration
-kubernetesVersion: "v{{ kubernetes_version }}.0"
-controlPlaneEndpoint: "{{ api_server_endpoint }}"
-networking:
-  podSubnet: "{{ pod_cidr }}"       # Custom subnet — case study gereksinimi
-  serviceSubnet: "{{ service_cidr }}"
----
-apiVersion: kubelet.config.k8s.io/v1beta1
-kind: KubeletConfiguration
-cgroupDriver: systemd    # containerd'nin SystemdCgroup ayarıyla eşleşmeli
-```
-
-`ansible/roles/worker/tasks/main.yml`:
-```yaml
----
-- name: Join command al
-  fetch:
-    src: /tmp/join-command.sh
-    dest: /tmp/join-command.sh
-    flat: true
-  delegate_to: "{{ groups['master'][0] }}"
-
-- name: Worker olarak cluster'a katıl
-  command: bash /tmp/join-command.sh
-  args:
-    creates: /etc/kubernetes/kubelet.conf
-```
-
-### Adım 6: Cluster'ı Kur
-
-```bash
-# Bağlantıyı test et
-ansible all -i ansible/inventory/hosts.ini -m ping
-
-# Cluster'ı kur (~10-15 dakika)
-ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml -v
-
-# kubeconfig'i yerel makineye kopyala
-ssh orb@master "cat ~/.kube/config" > ~/.kube/config-dreamgames
-export KUBECONFIG=~/.kube/config-dreamgames
-echo "export KUBECONFIG=~/.kube/config-dreamgames" >> ~/.zshrc
-
-# Doğrula
-kubectl get nodes -o wide
-```
-
-Beklenen çıktı:
-```
-NAME      STATUS   ROLES           AGE   VERSION   INTERNAL-IP
-master    Ready    control-plane   5m    v1.32.x   198.19.249.10
-worker1   Ready    <none>          3m    v1.32.x   198.19.249.11
-worker2   Ready    <none>          3m    v1.32.x   198.19.249.12
-```
-
-### Adım 7: Metrics Server (HPA için)
-
-```bash
-kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
-# 30 saniye bekle
-kubectl top nodes
-```
-
-📖 kubeadm: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/
-📖 Calico: https://docs.tigera.io/calico/latest/getting-started/kubernetes/self-managed-onprem/
-
----
-
-## Bölüm 3 — Network Altyapısı
-
-### Adım 8: MetalLB (Bare-metal LoadBalancer)
-
-Case study'de Vagrant cluster'ı için LoadBalancer tipi Service'lere IP atanması gerekir.
-MetalLB bu boşluğu doldurur.
-
-`kubernetes/metallb/ipaddresspool.yaml`:
-```yaml
-apiVersion: metallb.io/v1beta1
-kind: IPAddressPool
-metadata:
-  name: local-pool
-  namespace: metallb-system
-spec:
-  addresses:
-    - 192.168.56.200-192.168.56.220   # Vagrant/OrbStack private network aralığında
----
-apiVersion: metallb.io/v1beta1
-kind: L2Advertisement
-metadata:
-  name: local-l2
-  namespace: metallb-system
-spec:
-  ipAddressPools:
-    - local-pool
-```
-
-> OrbStack VM'lerde IP aralığını `orb ip master` çıktısına göre ayarla. Örnek:
-> `198.19.249.200-198.19.249.220`
-
-```bash
-helm repo add metallb https://metallb.github.io/metallb
-helm repo update
-helm install metallb metallb/metallb -n metallb-system --create-namespace --wait --timeout 3m
-kubectl apply -f kubernetes/metallb/ipaddresspool.yaml
-```
-
-📖 MetalLB: https://metallb.universe.tf/
-
-### Adım 9: Ingress-NGINX
-
-`kubernetes/ingress-nginx/values.yaml`:
-```yaml
-controller:
-  service:
-    type: LoadBalancer
-  metrics:
-    enabled: true
-    serviceMonitor:
-      enabled: true
-  config:
-    use-forwarded-headers: "true"
-```
-
-```bash
-helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx
-helm install ingress-nginx ingress-nginx/ingress-nginx \
-  -n ingress-nginx --create-namespace \
-  -f kubernetes/ingress-nginx/values.yaml \
-  --wait --timeout 3m
-
-INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller \
-  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-echo "Ingress IP: $INGRESS_IP"
-
-# /etc/hosts
-echo "$INGRESS_IP  app.example.com monitoring.example.com jenkins.example.com" \
-  | sudo tee -a /etc/hosts
-```
-
-### Adım 10: ExternalDNS
-
-Case study: *"Deploy ExternalDNS. Ensure that the DNS name is automatically created for the newly created service objects."*
-
-`kubernetes/externaldns/deployment.yaml`:
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: external-dns
-  namespace: kube-system
-spec:
-  strategy:
-    type: Recreate
-  selector:
-    matchLabels:
-      app: external-dns
-  template:
-    metadata:
-      labels:
-        app: external-dns
-    spec:
-      serviceAccountName: external-dns
-      containers:
-        - name: external-dns
-          image: registry.k8s.io/external-dns/external-dns:v0.14.0
-          args:
-            - --source=service
-            - --source=ingress
-            - --provider=coredns     # Cluster-internal CoreDNS (local kurulum için)
-            - --registry=txt
-            - --txt-owner-id=dreamgames
-          env:
-            - name: ETCD_URLS
-              value: "http://etcd-dreamgames.kube-system.svc.cluster.local:2379"
-```
-
-> **Local cluster için neden CoreDNS provider?**
-> AWS/GCP'de Route53/Cloud DNS kullanılır. Local cluster'da CoreDNS RFC2136 provider,
-> cluster-internal DNS kayıtlarını otomatik yönetir. Cloud ortamında provider değişir,
-> manifest yapısı aynı kalır.
-
-📖 ExternalDNS: https://github.com/kubernetes-sigs/external-dns
-📖 CoreDNS provider: https://github.com/kubernetes-sigs/external-dns/blob/master/docs/tutorials/coredns.md
-
-```bash
-kubectl apply -f kubernetes/externaldns/rbac.yaml
-kubectl apply -f kubernetes/externaldns/deployment.yaml
-```
-
----
-
-## Bölüm 4 — Uygulama ve Dockerfile
-
-### Case Study Ne İstiyor?
+#### Case Study Ne İstiyor?
 
 > *"You can either use an existing Java project, such as sample-java-app, or develop a new
 > Java application from scratch that prints the query string parameters of the service
 > endpoint to the console."*
 
-Java projesi kullanıyoruz — case study bunu açıkça izin veriyor.
+Sıfırdan bir Spring Boot uygulaması yazıyoruz: `/api/echo?param=value` çağrıldığında query
+string parametrelerini **console'a yazar** ve JSON döner.
 
-### Adım 11: Spring Boot Uygulaması
+#### Nasıl Yapılır?
 
 `app/pom.xml`:
 ```xml
@@ -781,6 +296,21 @@ Java projesi kullanıyoruz — case study bunu açıkça izin veriyor.
 </project>
 ```
 
+`app/src/main/java/com/dreamgames/QueryParamApplication.java`:
+```java
+package com.dreamgames;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class QueryParamApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(QueryParamApplication.class, args);
+    }
+}
+```
+
 `app/src/main/java/com/dreamgames/controller/QueryParamController.java`:
 ```java
 package com.dreamgames.controller;
@@ -823,6 +353,8 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
+      probes:
+        enabled: true          # /actuator/health/readiness ve /liveness aktif
       show-details: when-authorized
 
 spring:
@@ -830,64 +362,29 @@ spring:
     name: query-param-app
 ```
 
-### Adım 12: Async Logging (Step 1.7)
+> ℹ️ Logback dosya logging (async, 1GB, daily rotation) **Step 1.7'de** ekleniyor — case study
+> bu gereksinimi 7. maddede istiyor, biz de oraya bıraktık. Şimdilik default stdout logging yeterli.
 
-Case study: *"Write application logs to a file asynchronously. Ensure the log file size does not exceed 1GB. Rotate log files daily."*
+📖 Spring Boot Actuator: https://docs.spring.io/spring-boot/docs/3.2.1/reference/html/actuator.html
+📖 Micrometer Prometheus: https://docs.micrometer.io/micrometer/reference/implementations/prometheus.html
 
-`app/src/main/resources/logback-spring.xml`:
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<configuration>
-  <!-- Async olmayan appender: dosyaya yaz -->
-  <appender name="FILE_SYNC" class="ch.qos.logback.core.rolling.RollingFileAppender">
-    <file>/app/logs/application.log</file>
-    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-      <!-- Günlük rotation + boyut limiti — case study 7b ve 7c -->
-      <fileNamePattern>/app/logs/application.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
-      <maxFileSize>1GB</maxFileSize>     <!-- 1GB'ı geçince yeni dosya aç -->
-      <maxHistory>30</maxHistory>         <!-- 30 gün sakla -->
-      <totalSizeCap>10GB</totalSizeCap>   <!-- toplam disk kullanımı -->
-    </rollingPolicy>
-    <!-- JSON format — Fluent Bit'in parse etmesi için -->
-    <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
-  </appender>
+---
 
-  <!-- AsyncAppender: log yazma işlemi ayrı thread'de — case study 7a -->
-  <!-- Ana thread bloklanmaz → yüksek yük altında performans korunur -->
-  <appender name="FILE_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
-    <queueSize>1024</queueSize>
-    <discardingThreshold>0</discardingThreshold>   <!-- kuyrukte yer yoksa at değil bekle -->
-    <appender-ref ref="FILE_SYNC"/>
-  </appender>
+### Step 1.2: Dockerfile (Multi-stage)
 
-  <!-- stdout appender (Kubernetes log driver için) -->
-  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-    <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
-  </appender>
+#### Case Study Ne İstiyor?
 
-  <root level="INFO">
-    <appender-ref ref="FILE_ASYNC"/>
-    <appender-ref ref="STDOUT"/>
-  </root>
-</configuration>
-```
+> *"Create a Dockerfile for the application using multi-stage builds.*
+> *a. Provide strategies for accelerating the application build process.*
+> *b. The image size for the container should be as compact as possible.*
+> *c. Consider security best practices while creating a Dockerfile."*
 
-**Neden AsyncAppender?**
-
-Senkron log yazma: her log satırında dosya I/O bekler. Yüksek trafikte bu gecikmeye neden olur.
-AsyncAppender: log mesajları bir kuyruğa (1024 mesaj kapasiteli) yazılır, ayrı bir thread dosyaya yazar.
-Ana uygulama thread'i bloklanmaz → response time düşer.
-
-📖 Logback AsyncAppender: https://logback.qos.ch/manual/appenders.html#AsyncAppender
-📖 Logstash Encoder: https://github.com/logfellow/logstash-logback-encoder
-
-### Adım 13: Dockerfile (Multi-stage)
+#### Nasıl Yapılır?
 
 `app/Dockerfile`:
 ```dockerfile
-# Stage 1: Bağımlılıkları önbelleğe al
+# Stage 1: Bağımlılıkları önbelleğe al (build acceleration — case study 2a)
 # Sadece pom.xml kopyalanır → bağımlılıklar değişmedikçe bu katman cache'den gelir
-# → Sonraki build'ler çok daha hızlı (build acceleration — case study 2a)
 FROM maven:3.9-eclipse-temurin-21-alpine AS deps
 WORKDIR /app
 COPY pom.xml .
@@ -898,361 +395,537 @@ FROM deps AS builder
 COPY src/ ./src/
 RUN mvn clean package -DskipTests -q
 
-# Stage 3: Minimal runtime image
-# JRE-only Alpine: JDK yok, compiler yok, Maven yok → küçük imaj (case study 2b)
+# Stage 3: Minimal runtime (compact image — case study 2b)
+# JRE-only Alpine: JDK yok, compiler yok, Maven yok → küçük imaj (~200MB)
 FROM eclipse-temurin:21-jre-alpine AS runtime
 
-# Non-root user (case study 2c — security best practice)
+# Non-root user (security — case study 2c)
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-USER appuser
-
 WORKDIR /app
-
-# Uygulama log dizini
-RUN mkdir -p /app/logs
+RUN mkdir -p /app/logs && chown -R appuser:appgroup /app
+USER appuser
 
 COPY --from=builder /app/target/*.jar app.jar
 
 EXPOSE 8080 9090
 
-# -XX:MaxRAMPercentage: container belleğinin %75'i heap → sabit değer yerine dinamik
-# -Djava.security.egd: daha hızlı JVM başlangıcı (SecureRandom için)
+# MaxRAMPercentage=60: 256Mi limit → ~150Mi heap (dar M4 ortamı için headroom bırakır)
+# java.security.egd: daha hızlı JVM başlangıcı
 ENTRYPOINT ["java", \
-  "-XX:MaxRAMPercentage=75.0", \
+  "-XX:MaxRAMPercentage=60.0", \
   "-Djava.security.egd=file:/dev/./urandom", \
   "-jar", "app.jar"]
 ```
 
-### Adım 14: Local Test
+**Üç gereksinim nasıl karşılandı?**
+- **2a (build acceleration):** `deps` katmanı sadece `pom.xml`'e bağlı → kod değişince bağımlılıklar
+  yeniden indirilmez, cache'den gelir. Ayrıca BuildKit cache mount (`--mount=type=cache`) ve
+  registry layer cache ile CI'da daha da hızlanır.
+- **2b (compact):** Multi-stage → final imajda sadece JRE + JAR. JDK/Maven build katmanlarında kalır.
+- **2c (security):** non-root user, minimal Alpine base (az CVE yüzeyi), sadece gerekli portlar.
+  Step 2.2'de Trivy ile imaj taranır.
+
+#### Local Build ve Test
 
 ```bash
 cd app
 mvn clean package -DskipTests
 docker build -t dreamgames/query-param-app:1.0.0 .
-docker run --rm -p 8080:8080 -p 9090:9090 dreamgames/query-param-app:1.0.0
+docker run --rm -p 8080:8080 -p 9090:9090 dreamgames/query-param-app:1.0.0 &
 
-# Test
-curl 'http://localhost:8080/api/echo?hello=world&foo=bar'
-# Beklenen: {"hello":"world","foo":"bar"}
-
-curl 'http://localhost:9090/actuator/health'
-# Beklenen: {"status":"UP"}
-
+curl 'http://localhost:8080/api/echo?hello=world&foo=bar'   # → {"hello":"world","foo":"bar"}
+curl 'http://localhost:9090/actuator/health'                # → {"status":"UP"}
 curl 'http://localhost:9090/actuator/prometheus' | grep echo
-# Beklenen: http_server_requests_seconds_count
 
+# DockerHub'a push (case study: "DockerHub for Image Registry")
+docker login -u <DOCKERHUB_USER>
 docker push dreamgames/query-param-app:1.0.0
 cd ..
 ```
 
+📖 Multi-stage builds: https://docs.docker.com/build/building/multi-stage/
+📖 eclipse-temurin: https://hub.docker.com/_/eclipse-temurin
+
 ---
 
-## Bölüm 5 — Kubernetes Kaynakları
+### Step 1.3: Production Kubernetes Cluster
 
-### Adım 15: Namespace'ler ve Pod Security Admission
+#### Case Study Ne İstiyor?
 
-`kubernetes/namespaces/namespaces.yaml`:
+> *"Set up a production-ready Kubernetes cluster using tools like Kubeadm, Kubespray, or similar.*
+> *Note: Avoid using tools like kind, minikube, or k3s.*
+> *a. Ensure the Kubernetes version is 1.28 or higher.*
+> *b. Use custom subnets of your choice for Pod and Service.*
+> *c. Implementing the steps using the GitOps paradigm where applicable is highly desirable."*
+
+#### Neden kubeadm? Neden k3s/k3d yasak?
+
+k3s/k3d geliştirme ortamıdır; birçok K8s bileşeni sadeleştirilmiştir. kubeadm gerçek production
+kurulumudur — tüm bileşenler (etcd, apiserver, controller-manager, scheduler) ayrı ayrı, gerçek
+gibi. Değerlendirici "bu kişi gerçek cluster kurabiliyor mu?" sorusuna bakıyor.
+
+> 🗂 **GitOps (1.3c):** Tüm manifest'ler Git'te. Değişiklik → `git push` → Ansible/Jenkins deploy
+> eder. Bu rehber manifest'leri Git'te tutarak GitOps temelini kurar; ArgoCD/Flux eklenirse tam
+> GitOps olur (case study "highly desirable" demiş, zorunlu değil).
+
+#### Ansible Inventory ve Değişkenler
+
+`ansible/inventory/hosts.ini` (Multipass IP'leriyle):
+```ini
+[master]
+master  ansible_host=192.168.64.10  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+[workers]
+worker1 ansible_host=192.168.64.11  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+worker2 ansible_host=192.168.64.12  ansible_user=ubuntu  ansible_ssh_private_key_file=~/.ssh/id_ed25519
+
+[all:children]
+master
+workers
+```
+> `multipass list` çıktısındaki gerçek IP'leri yaz.
+
+`ansible/group_vars/all.yml`:
 ```yaml
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: app
-  labels:
-    # restricted: root çalışma, privilege escalation, host network yasak
-    pod-security.kubernetes.io/enforce: restricted
-    pod-security.kubernetes.io/warn: restricted
+kubernetes_version: "1.32"
+calico_version: "v3.29.1"
+
+# Case study 1.3b: custom subnets (default'lardan farklı seçildi)
+pod_cidr: "10.244.0.0/16"      # Pod-to-pod ağı
+service_cidr: "10.96.0.0/12"   # ClusterIP Service IP havuzu
+
+master_ip: "192.168.64.10"
+api_server_endpoint: "{{ master_ip }}:6443"
+```
+
+**Neden custom subnet?** Case study özellikle istiyor. Default'u değiştirmek "cluster ağını
+anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları programlasın.
+
+#### Ansible Rolleri
+
+`ansible/site.yml`:
+```yaml
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: monitoring
-  labels:
-    # node-exporter hostNetwork gerektirir → baseline
-    pod-security.kubernetes.io/enforce: baseline
-    pod-security.kubernetes.io/warn: restricted
+- name: Common + containerd (tüm node'lar)
+  hosts: all
+  become: true
+  roles: [common, containerd]
+
+- name: kubeadm paketleri (tüm node'lar)
+  hosts: all
+  become: true
+  roles: [kubeadm]
+
+- name: Master init
+  hosts: master
+  become: true
+  roles: [master]
+
+- name: Worker join
+  hosts: workers
+  become: true
+  roles: [worker]
+```
+
+`ansible/roles/common/tasks/main.yml`:
+```yaml
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: jenkins
-  labels:
-    pod-security.kubernetes.io/enforce: baseline
+- name: Swap kapat (kubeadm gereksinimi)
+  command: swapoff -a
+
+- name: Swap kalıcı kapat
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#].*?\sswap\s+sw\s+.*)$'
+    replace: '# \1'
+
+- name: Kernel modülleri (containerd için)
+  modprobe:
+    name: "{{ item }}"
+  loop: [overlay, br_netfilter]
+
+- name: Modülleri kalıcı yap
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    content: |
+      overlay
+      br_netfilter
+
+- name: Sysctl (K8s networking)
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_set: true
+    state: present
+    reload: true
+  loop:
+    - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
+    - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
+    - { key: "net.ipv4.ip_forward",                 value: "1" }
+```
+
+`ansible/roles/containerd/tasks/main.yml`:
+```yaml
 ---
-apiVersion: v1
-kind: Namespace
+- name: containerd kur
+  apt:
+    name: containerd
+    state: present
+    update_cache: true
+
+- name: Config dizini
+  file:
+    path: /etc/containerd
+    state: directory
+
+- name: Default config
+  shell: containerd config default > /etc/containerd/config.toml
+
+- name: SystemdCgroup aktif (kubeadm gereksinimi)
+  replace:
+    path: /etc/containerd/config.toml
+    regexp: 'SystemdCgroup = false'
+    replace: 'SystemdCgroup = true'
+  notify: restart containerd
+
+- name: containerd başlat
+  systemd:
+    name: containerd
+    enabled: true
+    state: started
+```
+
+`ansible/roles/containerd/handlers/main.yml`:
+```yaml
+---
+- name: restart containerd
+  systemd:
+    name: containerd
+    state: restarted
+```
+
+`ansible/roles/kubeadm/tasks/main.yml`:
+```yaml
+---
+- name: Kubernetes apt key
+  apt_key:
+    url: https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key
+    state: present
+
+- name: Kubernetes repo
+  apt_repository:
+    repo: "deb https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /"
+    state: present
+
+- name: kubeadm/kubelet/kubectl kur
+  apt:
+    name: [kubeadm, kubelet, kubectl]
+    state: present
+    update_cache: true
+
+- name: Paketleri hold et (otomatik upgrade engelle)
+  dpkg_selections:
+    name: "{{ item }}"
+    selection: hold
+  loop: [kubeadm, kubelet, kubectl]
+```
+
+`ansible/roles/master/tasks/main.yml`:
+```yaml
+---
+- name: kubeadm config oluştur
+  template:
+    src: kubeadm-config.yaml.j2
+    dest: /tmp/kubeadm-config.yaml
+
+- name: Cluster zaten init edilmiş mi?
+  stat:
+    path: /etc/kubernetes/admin.conf
+  register: kubeconfig_exists
+
+# --ignore-preflight-errors=Mem: master 1.5GB < resmi min 1700MB → preflight bypass
+- name: kubeadm init
+  command: >
+    kubeadm init --config=/tmp/kubeadm-config.yaml --upload-certs
+    --ignore-preflight-errors=Mem
+  when: not kubeconfig_exists.stat.exists
+  register: kubeadm_output
+
+- name: .kube dizini
+  file:
+    path: "{{ ansible_env.HOME }}/.kube"
+    state: directory
+
+- name: admin.conf kopyala
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: "{{ ansible_env.HOME }}/.kube/config"
+    remote_src: true
+    owner: "{{ ansible_user_id }}"
+    mode: '0600'
+
+- name: Calico CNI kur
+  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: not kubeconfig_exists.stat.exists
+
+- name: Join command al
+  command: kubeadm token create --print-join-command
+  register: join_command
+  changed_when: false
+
+# Join command'a Mem bypass ekle (worker'lar 700MB) → dosyaya yaz
+- name: Join command'ı dosyaya yaz
+  copy:
+    content: "{{ join_command.stdout }} --ignore-preflight-errors=Mem"
+    dest: /tmp/join-command.sh
+    mode: '0755'
+```
+
+`ansible/roles/master/templates/kubeadm-config.yaml.j2`:
+```yaml
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: "v{{ kubernetes_version }}.0"
+controlPlaneEndpoint: "{{ api_server_endpoint }}"
+networking:
+  podSubnet: "{{ pod_cidr }}"        # Custom subnet — case study 1.3b
+  serviceSubnet: "{{ service_cidr }}"
+---
+apiVersion: kubelet.config.k8s.io/v1beta1
+kind: KubeletConfiguration
+cgroupDriver: systemd                 # containerd SystemdCgroup ile eşleşmeli
+```
+
+`ansible/roles/worker/tasks/main.yml`:
+```yaml
+---
+- name: Join command'ı master'dan çek
+  fetch:
+    src: /tmp/join-command.sh
+    dest: /tmp/join-command.sh
+    flat: true
+  delegate_to: "{{ groups['master'][0] }}"
+
+- name: Cluster'a worker olarak katıl
+  command: bash /tmp/join-command.sh
+  args:
+    creates: /etc/kubernetes/kubelet.conf
+```
+
+#### Cluster'ı Kur (Faz 1 başlar)
+
+```bash
+# Bağlantı testi
+ansible all -i ansible/inventory/hosts.ini -m ping
+
+# Cluster kur (~10-15 dk)
+ansible-playbook -i ansible/inventory/hosts.ini ansible/site.yml -v
+
+# kubeconfig'i yerele kopyala
+ssh ubuntu@192.168.64.10 "cat ~/.kube/config" > ~/.kube/config-dreamgames
+export KUBECONFIG=~/.kube/config-dreamgames
+echo "export KUBECONFIG=~/.kube/config-dreamgames" >> ~/.zshrc
+
+kubectl get nodes -o wide
+```
+Beklenen:
+```
+NAME      STATUS   ROLES           AGE   VERSION
+master    Ready    control-plane   5m    v1.32.x
+worker1   Ready    <none>          3m    v1.32.x
+worker2   Ready    <none>          3m    v1.32.x
+```
+
+#### Metrics Server (HPA için)
+
+```bash
+kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+# Self-signed kubelet sertifikası için (lab ortamı):
+kubectl patch deployment metrics-server -n kube-system --type=json \
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+sleep 30 && kubectl top nodes
+```
+
+#### Production Katmanı: MetalLB (Bare-metal LoadBalancer)
+
+Bare-metal cluster'da `LoadBalancer` tipi Service IP alamaz. MetalLB bunu çözer — Jenkins (1.5d),
+monitoring ve uygulama Ingress'i için gerekli. Bu yüzden "production-ready cluster"ın parçası.
+
+`kubernetes/metallb/ipaddresspool.yaml`:
+```yaml
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
 metadata:
-  name: webhook-system
-  labels:
-    pod-security.kubernetes.io/enforce: restricted
+  name: local-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.64.200-192.168.64.220   # Multipass subnet aralığında boş IP'ler
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: local-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools: [local-pool]
+```
+> IP aralığını `multipass list` subnet'ine göre ayarla (örn. 192.168.64.x).
+
+```bash
+helm repo add metallb https://metallb.github.io/metallb && helm repo update
+helm install metallb metallb/metallb -n metallb-system --create-namespace --wait --timeout 3m
+kubectl apply -f kubernetes/metallb/ipaddresspool.yaml
+```
+
+#### Production Katmanı: Ingress-NGINX
+
+`kubernetes/ingress-nginx/values.yaml`:
+```yaml
+controller:
+  service:
+    type: LoadBalancer
+  metrics:
+    enabled: true
+    serviceMonitor:
+      enabled: true
+  config:
+    use-forwarded-headers: "true"
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
 ```
 
 ```bash
-kubectl apply -f kubernetes/namespaces/namespaces.yaml
+helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && helm repo update
+helm install ingress-nginx ingress-nginx/ingress-nginx \
+  -n ingress-nginx --create-namespace \
+  -f kubernetes/ingress-nginx/values.yaml --wait --timeout 3m
+
+INGRESS_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "Ingress IP: $INGRESS_IP"
+
+# /etc/hosts'a ekle (case study: hostname erişimi)
+echo "$INGRESS_IP  app.example.com monitoring.example.com jenkins.example.com" | sudo tee -a /etc/hosts
 ```
 
-### Adım 16: Deployment
+📖 kubeadm: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/
+📖 Calico: https://docs.tigera.io/calico/latest/
+📖 MetalLB: https://metallb.universe.tf/
+📖 Ingress-NGINX: https://kubernetes.github.io/ingress-nginx/
 
-`kubernetes/app/deployment.yaml`:
+---
+
+### Step 1.4: ExternalDNS
+
+#### Case Study Ne İstiyor?
+
+> *"Deploy ExternalDNS on the cluster.*
+> *a. Share your configuration.*
+> *b. Ensure that the DNS name is automatically created for the newly created service objects.
+>    Please share your Kubernetes manifest files."*
+
+#### Nasıl Yapılır?
+
+`kubernetes/externaldns/rbac.yaml`:
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: external-dns
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: external-dns
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods"]
+    verbs: ["get", "watch", "list"]
+  - apiGroups: ["extensions", "networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "watch", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: external-dns-viewer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: external-dns
+subjects:
+  - kind: ServiceAccount
+    name: external-dns
+    namespace: kube-system
+```
+
+`kubernetes/externaldns/deployment.yaml`:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: query-param-app
-  namespace: app
+  name: external-dns
+  namespace: kube-system
 spec:
-  replicas: 4    # Case study: minimum 4 pod
-  selector:
-    matchLabels:
-      app: query-param-app
   strategy:
-    type: RollingUpdate
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0    # Sıfır kesintili güncelleme — case study Step 2.3c
+    type: Recreate
+  selector:
+    matchLabels: { app: external-dns }
   template:
     metadata:
-      labels:
-        app: query-param-app
-      annotations:
-        prometheus.io/scrape: "true"
-        prometheus.io/port: "9090"
-        prometheus.io/path: "/actuator/prometheus"
+      labels: { app: external-dns }
     spec:
-      serviceAccountName: query-param-app
-      # Pod'ları worker1 ve worker2'ye dağıt — case study Step 2.1a
-      topologySpreadConstraints:
-        - maxSkew: 1
-          topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: DoNotSchedule
-          labelSelector:
-            matchLabels:
-              app: query-param-app
+      serviceAccountName: external-dns
       containers:
-        - name: query-param-app
-          image: dreamgames/query-param-app:1.0.0
-          ports:
-            - containerPort: 8080
-              name: http
-            - containerPort: 9090
-              name: management
+        - name: external-dns
+          image: registry.k8s.io/external-dns/external-dns:v0.14.0
+          args:
+            - --source=service          # Service objelerini izle (1.4b)
+            - --source=ingress          # Ingress objelerini izle
+            - --provider=coredns        # Local cluster: cluster-internal CoreDNS
+            - --registry=txt
+            - --txt-owner-id=dreamgames
+          env:
+            - name: ETCD_URLS
+              value: "http://etcd-dreamgames.kube-system.svc.cluster.local:2379"
           resources:
-            requests:
-              cpu: 250m
-              memory: 256Mi
-            limits:
-              cpu: 1000m
-              memory: 512Mi
-          # readinessProbe: hazır olana kadar trafik gelmesin — case study Step 2.1b
-          readinessProbe:
-            httpGet:
-              path: /actuator/health/readiness
-              port: 9090
-            initialDelaySeconds: 30
-            periodSeconds: 5
-            failureThreshold: 3
-          # livenessProbe: cevap vermezse yeniden başlat — case study Step 2.1b
-          livenessProbe:
-            httpGet:
-              path: /actuator/health/liveness
-              port: 9090
-            initialDelaySeconds: 60
-            periodSeconds: 10
-            failureThreshold: 3
-          # preStop: terminate sinyalinden önce 5 sn bekle → uçuştaki istekler tamamlanır
-          lifecycle:
-            preStop:
-              exec:
-                command: ["sh", "-c", "sleep 5"]
-          volumeMounts:
-            - name: logs
-              mountPath: /app/logs
-          securityContext:
-            runAsNonRoot: true
-            runAsUser: 1000
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: false    # log dizini yazılabilir olmalı
-            capabilities:
-              drop: ["ALL"]
-      terminationGracePeriodSeconds: 30
-      securityContext:
-        runAsNonRoot: true
-        seccompProfile:
-          type: RuntimeDefault
-      volumes:
-        - name: logs
-          emptyDir: {}
+            requests: { cpu: 50m, memory: 64Mi }
 ```
 
-### Adım 17: Service, HPA, PDB
-
-`kubernetes/app/service.yaml`:
-```yaml
-apiVersion: v1
-kind: Service
-metadata:
-  name: query-param-app
-  namespace: app
-spec:
-  selector:
-    app: query-param-app
-  ports:
-    - name: http
-      port: 80
-      targetPort: 8080
-    - name: management
-      port: 9090
-      targetPort: 9090
-```
-
-`kubernetes/app/hpa.yaml`:
-```yaml
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: query-param-app
-  namespace: app
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: query-param-app
-  minReplicas: 4
-  maxReplicas: 16
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
-  behavior:
-    scaleDown:
-      stabilizationWindowSeconds: 300    # 5 dk: ani ölçek küçültmesini engelle
-      policies:
-        - type: Pods
-          value: 2
-          periodSeconds: 60
-```
-
-`kubernetes/app/pdb.yaml`:
-```yaml
-apiVersion: policy/v1
-kind: PodDisruptionBudget
-metadata:
-  name: query-param-app
-  namespace: app
-spec:
-  selector:
-    matchLabels:
-      app: query-param-app
-  maxUnavailable: 1    # kubectl drain: aynı anda en fazla 1 pod kaldır
-```
-
-`kubernetes/app/ingress.yaml`:
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: query-param-app
-  namespace: app
-  annotations:
-    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
-spec:
-  ingressClassName: nginx
-  rules:
-    - host: app.example.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service:
-                name: query-param-app
-                port:
-                  number: 80
-```
-
-`kubernetes/app/networkpolicy.yaml`:
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: default-deny
-  namespace: app
-spec:
-  podSelector: {}
-  policyTypes:
-    - Ingress
-    - Egress
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: query-param-app-allow
-  namespace: app
-spec:
-  podSelector:
-    matchLabels:
-      app: query-param-app
-  policyTypes:
-    - Ingress
-    - Egress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: ingress-nginx
-      ports:
-        - port: 8080
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-      ports:
-        - port: 9090
-  egress:
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - port: 53
-          protocol: UDP
-        - port: 53
-          protocol: TCP
-```
-
-### Adım 18: Deploy Et
+> **Local cluster için neden CoreDNS provider?** AWS/GCP'de Route53/Cloud DNS kullanılır.
+> Local'de CoreDNS (RFC2136/etcd backend) cluster-internal DNS kayıtlarını otomatik yönetir.
+> Cloud'a taşırken sadece `--provider` ve credential değişir; manifest yapısı aynı kalır.
+> `--source=service` sayesinde yeni Service oluşunca (1.4b) DNS kaydı otomatik açılır.
 
 ```bash
-kubectl apply -f kubernetes/app/
-
-kubectl rollout status deployment/query-param-app -n app --timeout=120s
-kubectl get pods -n app -o wide   # worker1 ve worker2'ye dağılmış mı?
-
-# Smoke test
-curl 'http://app.example.com/api/echo?hello=world'
-# Beklenen: {"hello":"world"}
+kubectl apply -f kubernetes/externaldns/rbac.yaml
+kubectl apply -f kubernetes/externaldns/deployment.yaml
+kubectl logs -n kube-system deploy/external-dns | head   # "Created/Updated record" satırları
 ```
+
+📖 ExternalDNS: https://github.com/kubernetes-sigs/external-dns
+📖 CoreDNS provider: https://github.com/kubernetes-sigs/external-dns/blob/master/docs/tutorials/coredns.md
 
 ---
 
-## Bölüm 6 — Jenkins CI/CD
+### Step 1.5: Jenkins
 
-### Case Study Ne İstiyor?
+#### Case Study Ne İstiyor?
 
-> *"Jenkins should be installed exclusively on Node 3."*
-> *"Configuring Jenkins using a 'configuration as code' approach is preferred."*
-> *"Configuration of Jenkins should persist across restarts or upgrades."*
-> *"Use Ansible to apply Kubernetes manifests."* ← deploy pipeline için kritik!
+> *"Deploy Jenkins on Kubernetes cluster.*
+> *a. Jenkins should be installed exclusively on Node 3.*
+> *b. Configuring Jenkins using a 'configuration as code' approach is preferred.*
+> *c. Configuration of Jenkins should persist across restarts or upgrades.*
+> *d. Jenkins should be accessible via its hostname using a LoadBalancer."*
 
-### Adım 19: Jenkins PV (Node 3 Pin)
+> ⚠️ **Faz 4 başlar.** Bu fazdan önce uygulamayı küçült:
+> `kubectl scale deployment query-param-app --replicas=1 -n app` (Step 2.1'i yaptıysan).
 
-Jenkins'in worker2 (Node 3) üzerinde çalışması için PersistentVolume + nodeAffinity:
+#### Jenkins PV (Node 3 = worker2 pin) — 1.5a + 1.5c
 
 `kubernetes/jenkins/pv.yaml`:
 ```yaml
@@ -1263,62 +936,63 @@ metadata:
 spec:
   capacity:
     storage: 20Gi
-  accessModes:
-    - ReadWriteOnce
+  accessModes: [ReadWriteOnce]
   persistentVolumeReclaimPolicy: Retain
   storageClassName: local-storage
   local:
     path: /mnt/jenkins
-  nodeAffinity:
+  nodeAffinity:                  # PV worker2'ye bağlı → veri kaybolmaz (1.5c persistence)
     required:
       nodeSelectorTerms:
         - matchExpressions:
             - key: kubernetes.io/hostname
               operator: In
-              values:
-                - worker2    # Node 3 = worker2
+              values: [worker2]   # Node 3
 ```
 
 ```bash
-# worker2 üzerinde dizin oluştur
-ssh orb@worker2 "sudo mkdir -p /mnt/jenkins && sudo chown 1000:1000 /mnt/jenkins"
-
+multipass exec worker2 -- sudo mkdir -p /mnt/jenkins
+multipass exec worker2 -- sudo chown 1000:1000 /mnt/jenkins
 kubectl apply -f kubernetes/jenkins/pv.yaml
 ```
 
-### Adım 20: Jenkins Secrets
+#### Jenkins Secrets (hardcode yasak!)
 
 ```bash
 kubectl create namespace jenkins
-
-# DockerHub token: https://hub.docker.com/settings/security → New Access Token
-# GitHub token: https://github.com/settings/tokens
+# DockerHub token: https://hub.docker.com/settings/security
+# GitHub token:    https://github.com/settings/tokens
 kubectl create secret generic jenkins-credentials \
   --from-literal=admin-password="$(openssl rand -base64 24)" \
-  --from-literal=dockerhub-user=<DOCKERHUB_KULLANICI> \
+  --from-literal=dockerhub-user=<DOCKERHUB_USER> \
   --from-literal=dockerhub-token=<DOCKERHUB_TOKEN> \
   --from-literal=github-token=<GITHUB_TOKEN> \
   -n jenkins
 ```
+> ⚠️ Değerleri şifre yöneticisinden kopyala; sonra `history -c` ile terminal geçmişini temizle.
 
-> ⚠️ Token değerlerini terminale girmeden önce şifre yöneticisinden kopyala.
-> Girdikten sonra `history -c` ile terminal geçmişini temizle.
-
-### Adım 21: Jenkins Helm Values
+#### Jenkins Helm Values — 1.5a/b/c/d hepsi
 
 `kubernetes/jenkins/values.yaml`:
 ```yaml
 controller:
-  # Node 3 (worker2) üzerine pin — case study gereksinimi
+  # 1.5a: Node 3 (worker2) üzerine pin
   nodeSelector:
     kubernetes.io/hostname: worker2
 
+  # 1.5d: LoadBalancer + hostname erişimi
+  serviceType: LoadBalancer
   ingress:
     enabled: true
     hostName: jenkins.example.com
     ingressClassName: nginx
 
-  # JCasC — case study: "configuration as code approach is preferred"
+  # Dar M4 ortamı için kaynak sınırı
+  resources:
+    requests: { cpu: 250m, memory: 512Mi }
+    limits:   { cpu: 1000m, memory: 1Gi }
+
+  # 1.5b: JCasC (Configuration as Code)
   JCasC:
     defaultConfig: true
     configScripts:
@@ -1332,7 +1006,6 @@ controller:
                       id: "dockerhub-creds"
                       username: ${DOCKERHUB_USER}
                       password: ${DOCKERHUB_TOKEN}
-                      description: "Docker Hub"
                   - string:
                       scope: GLOBAL
                       id: "github-token"
@@ -1340,20 +1013,11 @@ controller:
 
   containerEnv:
     - name: DOCKERHUB_USER
-      valueFrom:
-        secretKeyRef:
-          name: jenkins-credentials
-          key: dockerhub-user
+      valueFrom: { secretKeyRef: { name: jenkins-credentials, key: dockerhub-user } }
     - name: DOCKERHUB_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: jenkins-credentials
-          key: dockerhub-token
+      valueFrom: { secretKeyRef: { name: jenkins-credentials, key: dockerhub-token } }
     - name: GITHUB_TOKEN
-      valueFrom:
-        secretKeyRef:
-          name: jenkins-credentials
-          key: github-token
+      valueFrom: { secretKeyRef: { name: jenkins-credentials, key: github-token } }
 
   adminSecret: false
   existingSecret: jenkins-credentials
@@ -1364,9 +1028,9 @@ controller:
     - workflow-aggregator:latest
     - docker-workflow:latest
     - kubernetes:latest
-    - ansible:latest    # Ansible pipeline adımları için
+    - ansible:latest          # Step 2.3 deploy pipeline Ansible kullanır
 
-# Config persistence — case study: "persist across restarts or upgrades"
+# 1.5c: config persistence (restart/upgrade'de kaybolmaz)
 persistence:
   enabled: true
   storageClass: local-storage
@@ -1374,260 +1038,44 @@ persistence:
 ```
 
 ```bash
-helm repo add jenkins https://charts.jenkins.io
-helm repo update
-helm install jenkins jenkins/jenkins -n jenkins \
-  -f kubernetes/jenkins/values.yaml \
-  --wait --timeout 5m
+helm repo add jenkins https://charts.jenkins.io && helm repo update
+helm install jenkins jenkins/jenkins -n jenkins -f kubernetes/jenkins/values.yaml --wait --timeout 6m
+
+# Node 3 (worker2) doğrula
+kubectl get pod -n jenkins -o wide   # NODE sütunu = worker2
+
+# LoadBalancer IP + hostname erişimi
+kubectl get svc -n jenkins jenkins   # EXTERNAL-IP MetalLB'den gelmeli
+# http://jenkins.example.com
 ```
 
-**Neden nodeSelector: worker2?**
+**Neden nodeSelector: worker2?** Case study "exclusively on Node 3" diyor. Node 3 = worker2.
+nodeSelector pod'u sadece worker2'ye schedule eder; PV de nodeAffinity ile worker2'ye bağlı →
+Jenkins pod + verisi her zaman aynı node'da, restart'ta veri korunur.
 
-Case study "Jenkins should be installed exclusively on Node 3" diyor. Node 3 = worker2
-(Vagrantfile'da 3. VM). nodeSelector ile Kubernetes bu pod'u sadece worker2'ye schedule
-eder. PV de nodeAffinity ile worker2'ye bağlı → Jenkins pod + veri her zaman aynı node'da.
+> 💾 **Faz 4 sonu:** Build/deploy pipeline'larını (Step 2.2, 2.3) Jenkins ayaktayken oluştur ve
+> çalıştır, screenshot al. Sonra RAM boşalt: `helm uninstall jenkins -n jenkins`
+> (PV `Retain` olduğu için veri /mnt/jenkins'te kalır, tekrar kurunca geri gelir).
 
-### Adım 22: Build Pipeline
-
-`jenkins/Jenkinsfile.build`:
-```groovy
-pipeline {
-    agent any
-    environment {
-        REGISTRY   = "docker.io"
-        IMAGE_NAME = "dreamgames/query-param-app"
-        // :latest KULLANMA — mutable tag, hangi kod çalıştığı bilinmez
-        IMAGE_TAG  = "${BUILD_NUMBER}-${GIT_COMMIT.take(7)}"
-    }
-    stages {
-        stage('Checkout') {
-            steps { checkout scm }
-        }
-        stage('Unit Test') {
-            steps {
-                dir('app') {
-                    sh 'mvn clean test -q'
-                }
-            }
-        }
-        stage('Build JAR') {
-            steps {
-                dir('app') {
-                    sh 'mvn clean package -DskipTests -q'
-                }
-            }
-        }
-        stage('Build Image') {
-            steps {
-                dir('app') {
-                    sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ."
-                }
-            }
-        }
-        stage('Security Scan') {
-            // Trivy: HIGH/CRITICAL CVE varsa pipeline durur, imaj push edilmez
-            steps {
-                sh """
-                    docker run --rm \
-                      -v /var/run/docker.sock:/var/run/docker.sock \
-                      aquasec/trivy:latest image \
-                      --exit-code 1 --severity HIGH,CRITICAL \
-                      --no-progress \
-                      ${IMAGE_NAME}:${IMAGE_TAG}
-                """
-            }
-        }
-        stage('Push Image') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'dockerhub-creds',
-                    usernameVariable: 'DOCKER_USER',
-                    passwordVariable: 'DOCKER_PASS'
-                )]) {
-                    sh """
-                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
-                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                        docker logout
-                    """
-                }
-            }
-        }
-        stage('Tag Git') {
-            steps {
-                sh "git tag v${IMAGE_TAG} && git push origin v${IMAGE_TAG} || true"
-            }
-        }
-    }
-    post {
-        always {
-            sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true"
-        }
-    }
-}
-```
-
-### Adım 23: Deploy Pipeline (Ansible ile)
-
-Case study: **"Use Ansible to apply Kubernetes manifests."** — Bu kritik bir gereksinim.
-`kubectl apply` değil, Ansible kullanılmalı.
-
-`ansible/deploy-app.yml`:
-```yaml
----
-- name: Deploy query-param-app to Kubernetes
-  hosts: master
-  become: false
-  vars:
-    app_namespace: "{{ app_namespace | default('app') }}"
-    docker_user:   "{{ docker_user | default('dreamgames') }}"
-    image_tag:     "{{ image_tag | default('latest') }}"
-  tasks:
-    - name: Deployment'ı güncelle
-      kubernetes.core.k8s:
-        state: present
-        definition:
-          apiVersion: apps/v1
-          kind: Deployment
-          metadata:
-            name: query-param-app
-            namespace: "{{ app_namespace }}"
-          spec:
-            template:
-              spec:
-                containers:
-                  - name: query-param-app
-                    image: "{{ docker_user }}/query-param-app:{{ image_tag }}"
-
-    - name: Rollout status kontrol
-      command: >
-        kubectl rollout status deployment/query-param-app
-        -n {{ app_namespace }}
-        --timeout=5m
-      register: rollout_result
-      failed_when: rollout_result.rc != 0
-
-    - name: Rollback (rollout başarısız olduysa)
-      command: kubectl rollout undo deployment/query-param-app -n {{ app_namespace }}
-      when: rollout_result.rc != 0
-```
-
-`jenkins/Jenkinsfile.deploy`:
-```groovy
-pipeline {
-    agent {
-        kubernetes {
-            yaml """
-apiVersion: v1
-kind: Pod
-spec:
-  containers:
-  - name: ansible
-    image: cytopia/ansible:2.15-tools
-    command: ['sleep', '99d']
-    resources:
-      requests:
-        cpu: 200m
-        memory: 256Mi
-  - name: kubectl
-    image: bitnami/kubectl:1.28
-    command: ['sleep', '99d']
-    resources:
-      requests:
-        cpu: 100m
-        memory: 128Mi
-"""
-        }
-    }
-    parameters {
-        string(name: 'IMAGE_TAG',   description: 'Deploy edilecek tag (örn: 42-abc1234)')
-        choice(name: 'ENVIRONMENT', choices: ['app', 'staging'], description: 'Target namespace')
-        booleanParam(name: 'DRY_RUN', defaultValue: false, description: 'Dry-run modu')
-    }
-    environment {
-        KUBECONFIG = credentials('kubeconfig')
-    }
-    stages {
-        stage('Checkout') {
-            steps { checkout scm }
-        }
-        stage('Validate Manifests') {
-            steps {
-                container('kubectl') {
-                    sh """
-                        kubectl apply -f kubernetes/app/ \
-                          --dry-run=client \
-                          --namespace=${params.ENVIRONMENT}
-                    """
-                }
-            }
-        }
-        stage('Deploy via Ansible') {
-            // Case study: "Use Ansible to apply Kubernetes manifests"
-            steps {
-                container('ansible') {
-                    sh """
-                        ansible-playbook ansible/deploy-app.yml \
-                          -i ansible/inventory/hosts.ini \
-                          -e image_tag=${params.IMAGE_TAG} \
-                          -e docker_user=dreamgames \
-                          -e app_namespace=${params.ENVIRONMENT} \
-                          ${params.DRY_RUN ? '--check' : ''}
-                    """
-                }
-            }
-        }
-        stage('Verify Rollout') {
-            when { not { expression { params.DRY_RUN } } }
-            steps {
-                container('kubectl') {
-                    sh """
-                        kubectl rollout status deployment/query-param-app \
-                          -n ${params.ENVIRONMENT} --timeout=5m
-                        kubectl get pods -n ${params.ENVIRONMENT} -o wide
-                    """
-                }
-            }
-        }
-        stage('Smoke Test') {
-            when { not { expression { params.DRY_RUN } } }
-            steps {
-                sh """
-                    sleep 10
-                    curl -sf http://app.example.com/api/echo?smoke=true | grep smoke || exit 1
-                    echo "Smoke test PASSED"
-                """
-            }
-        }
-    }
-    post {
-        failure {
-            container('kubectl') {
-                sh "kubectl rollout undo deployment/query-param-app -n ${params.ENVIRONMENT} || true"
-            }
-        }
-    }
-}
-```
-
-**Neden Ansible, kubectl değil?**
-
-Case study bunu açıkça istiyor. Ama mantığı da var: Ansible idempotent, playbook
-tekrar çalıştırılabilir, sonuç aynı olur. Ayrıca Ansible cluster dışından da çalışır
-(kubeconfig ile) — Jenkins'in K8s API'ye doğrudan erişmesi gerekmez.
+📖 Jenkins Helm: https://www.jenkins.io/doc/book/installing/kubernetes/
+📖 JCasC: https://www.jenkins.io/projects/jcasc/
 
 ---
 
-## Bölüm 7 — Monitoring Stack
+### Step 1.6: Monitoring Stack
 
-### Case Study Ne İstiyor?
+#### Case Study Ne İstiyor?
 
-> *"Deploy Prometheus, Elasticsearch, Grafana, fluent-bit, and AlertManager"*
-> *"Create custom Grafana dashboards to visualize Kubernetes and application metrics"*
-> *"Set up alert conditions in AlertManager, which are triggered when the pod restarts"*
-> *"Use a single hostname with a combination of different paths to access Prometheus,
->    Elasticsearch, and Grafana dashboards"*
+> *"Deploy Prometheus, Elasticsearch, Grafana, fluent-bit, and AlertManager.*
+> *a. Create custom Grafana dashboards to visualize Kubernetes and application metrics.*
+> *b. Set up alert conditions in AlertManager, which are triggered when the pod restarts.*
+> *c. Use a single hostname with a combination of different paths to access Prometheus,
+>    Elasticsearch, and Grafana dashboards.*
+> *d. Forward application logs to Elasticsearch."*
 
-### Adım 24: Monitoring Secrets
+> ⚠️ **Faz 5-6.** Jenkins'i kapattıysan RAM hazır. ES ağırdır → kendi alt fazında çalıştır.
+
+#### Monitoring Secrets
 
 ```bash
 kubectl create namespace monitoring
@@ -1636,13 +1084,12 @@ kubectl create secret generic grafana-admin-secret -n monitoring \
   --from-literal=admin-user=admin \
   --from-literal=admin-password="$(openssl rand -base64 24)"
 
-# Slack webhook için (AlertManager)
-# Webhook oluştur: https://api.slack.com/messaging/webhooks
+# Slack webhook (hardcode yasak): https://api.slack.com/messaging/webhooks
 kubectl create secret generic alertmanager-slack-secret -n monitoring \
   --from-literal=webhookUrl='https://hooks.slack.com/services/...'
 ```
 
-### Adım 25: kube-prometheus-stack
+#### kube-prometheus-stack (Prometheus + Grafana + AlertManager)
 
 `kubernetes/monitoring/kube-prometheus-stack-values.yaml`:
 ```yaml
@@ -1663,7 +1110,9 @@ grafana:
   sidecar:
     dashboards:
       enabled: true
-      label: grafana_dashboard    # Bu label'lı ConfigMap'leri otomatik yükle
+      label: grafana_dashboard       # Bu label'lı ConfigMap'ler otomatik yüklenir
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
 
 prometheus:
   prometheusSpec:
@@ -1672,8 +1121,14 @@ prometheus:
     ruleSelectorNilUsesHelmValues: false
     externalUrl: "http://monitoring.example.com/prometheus"
     routePrefix: /prometheus
+    retention: 2h                      # Dar disk için kısa retention
+    resources:
+      requests: { cpu: 100m, memory: 384Mi }
 
 alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests: { cpu: 25m, memory: 64Mi }
   config:
     global:
       resolve_timeout: 5m
@@ -1695,17 +1150,12 @@ alertmanager:
 ```
 
 ```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts && helm repo update
 helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  -n monitoring \
-  -f kubernetes/monitoring/kube-prometheus-stack-values.yaml \
-  --wait --timeout 10m
+  -n monitoring -f kubernetes/monitoring/kube-prometheus-stack-values.yaml --wait --timeout 10m
 ```
 
-### Adım 26: Tek Hostname — Çoklu Path Ingress
-
-Case study: *"single hostname with a combination of different paths"*
+#### 1.6c: Tek Hostname — Çoklu Path Ingress
 
 `kubernetes/monitoring/ingress-monitoring.yaml`:
 ```yaml
@@ -1719,44 +1169,26 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: monitoring.example.com
+    - host: monitoring.example.com          # TEK hostname
       http:
         paths:
           - path: /grafana(/|$)(.*)
             pathType: ImplementationSpecific
-            backend:
-              service:
-                name: kube-prometheus-stack-grafana
-                port:
-                  number: 80
+            backend: { service: { name: kube-prometheus-stack-grafana, port: { number: 80 } } }
           - path: /prometheus(/|$)(.*)
             pathType: ImplementationSpecific
-            backend:
-              service:
-                name: kube-prometheus-stack-prometheus
-                port:
-                  number: 9090
+            backend: { service: { name: kube-prometheus-stack-prometheus, port: { number: 9090 } } }
           - path: /elasticsearch(/|$)(.*)
             pathType: ImplementationSpecific
-            backend:
-              service:
-                name: elasticsearch-es-http
-                port:
-                  number: 9200
+            backend: { service: { name: elasticsearch-es-http, port: { number: 9200 } } }
 ```
 
 ```bash
 kubectl apply -f kubernetes/monitoring/ingress-monitoring.yaml
-
-# Erişim:
-# http://monitoring.example.com/grafana      → Grafana
-# http://monitoring.example.com/prometheus   → Prometheus
-# http://monitoring.example.com/elasticsearch → Elasticsearch
+# http://monitoring.example.com/grafana | /prometheus | /elasticsearch
 ```
 
-### Adım 27: Alert Kuralları
-
-Case study: *"alert conditions triggered when the pod restarts"* — PodCrashLooping bu.
+#### 1.6b: Pod Restart Alert (+ ek kurallar)
 
 `kubernetes/monitoring/alertmanager-rules.yaml`:
 ```yaml
@@ -1772,99 +1204,68 @@ spec:
   groups:
     - name: pod.rules
       rules:
-        # Case study: "alert when the pod restarts"
+        # Case study 1.6b: "alert when the pod restarts"
+        - alert: PodRestarted
+          expr: increase(kube_pod_container_status_restarts_total{namespace="app"}[5m]) > 0
+          for: 0m
+          labels: { severity: critical }
+          annotations:
+            summary: "Pod {{ $labels.pod }} yeniden başladı"
+            description: "{{ $labels.namespace }}/{{ $labels.pod }} restart oldu."
+            runbook: "kubectl logs -n {{ $labels.namespace }} {{ $labels.pod }} --previous"
         - alert: PodCrashLooping
           expr: rate(kube_pod_container_status_restarts_total{namespace="app"}[15m]) > 0
           for: 5m
-          labels:
-            severity: critical
+          labels: { severity: critical }
           annotations:
             summary: "Pod {{ $labels.pod }} crash looping"
-            description: "{{ $labels.namespace }}/{{ $labels.pod }} yeniden başlıyor."
-            runbook: "kubectl logs -n {{ $labels.namespace }} {{ $labels.pod }} --previous"
-
-        - alert: PodNotReady
-          expr: kube_pod_status_ready{namespace="app",condition="true"} == 0
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Pod hazır değil: {{ $labels.pod }}"
-
         - alert: DeploymentReplicasMismatch
-          expr: |
-            kube_deployment_spec_replicas{namespace="app"} !=
-            kube_deployment_status_available_replicas{namespace="app"}
+          expr: kube_deployment_spec_replicas{namespace="app"} != kube_deployment_status_available_replicas{namespace="app"}
           for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Deployment replica sayısı tutarsız"
-
+          labels: { severity: warning }
+          annotations: { summary: "Deployment replica sayısı tutarsız" }
     - name: app.rules
       rules:
         - alert: HighRequestLatency
-          expr: |
-            histogram_quantile(0.95,
-              sum(rate(http_server_requests_seconds_bucket{namespace="app"}[5m])) by (le)
-            ) > 1.0
+          expr: histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace="app"}[5m])) by (le)) > 1.0
           for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "p95 latency 1 saniyeyi aştı"
-            description: "Son 5 dakikada p95 response time yüksek."
-
+          labels: { severity: warning }
+          annotations: { summary: "p95 latency 1 saniyeyi aştı" }
         - alert: HighErrorRate
           expr: |
             sum(rate(http_server_requests_seconds_count{namespace="app",status=~"5.."}[5m])) /
             sum(rate(http_server_requests_seconds_count{namespace="app"}[5m])) * 100 > 5
           for: 5m
-          labels:
-            severity: critical
-          annotations:
-            summary: "5xx hata oranı %5 üzerinde"
-
+          labels: { severity: critical }
+          annotations: { summary: "5xx hata oranı %5 üzerinde" }
         - alert: HPAMaxedOut
           expr: |
             kube_horizontalpodautoscaler_status_current_replicas{namespace="app"} >=
             kube_horizontalpodautoscaler_spec_max_replicas{namespace="app"}
           for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "HPA maksimum replica sayısına ulaştı — kapasite artırılmalı"
-
+          labels: { severity: warning }
+          annotations: { summary: "HPA maksimuma ulaştı — kapasite artırılmalı" }
     - name: node.rules
       rules:
-        - alert: NodeHighCPU
-          expr: |
-            100 - (avg by(node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
-          for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Node CPU yüksek: {{ $labels.node }}"
-
         - alert: NodeHighMemory
-          expr: |
-            (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
+          expr: (1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100 > 85
           for: 10m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Node bellek yüksek: {{ $labels.node }}"
+          labels: { severity: warning }
+          annotations: { summary: "Node bellek yüksek: {{ $labels.node }}" }
 ```
 
 ```bash
 kubectl apply -f kubernetes/monitoring/alertmanager-rules.yaml
 kubectl get prometheusrule -n monitoring
+
+# Alert testini tetikle: bir pod'u öldür → PodRestarted ateşlenmeli
+kubectl delete pod -n app -l app=query-param-app --field-selector status.phase=Running | head -1
 ```
 
-### Adım 28: Grafana Dashboards
+#### 1.6a: Grafana Dashboards (K8s + App)
 
-Case study: *"Create custom Grafana dashboards to visualize Kubernetes and application metrics"*
-→ İki dashboard: K8s cluster genel durum + uygulama RED metrikleri.
+İki dashboard: cluster genel durum + uygulama RED metrikleri. `grafana_dashboard: "1"` label'ı
+sayesinde Grafana sidecar otomatik yükler.
 
 `kubernetes/monitoring/grafana-dashboards/k8s-overview-configmap.yaml`:
 ```yaml
@@ -1873,73 +1274,25 @@ kind: ConfigMap
 metadata:
   name: k8s-overview-dashboard
   namespace: monitoring
-  labels:
-    grafana_dashboard: "1"    # Grafana sidecar otomatik yükler
+  labels: { grafana_dashboard: "1" }
 data:
   k8s-overview.json: |
     {
-      "title": "Kubernetes Cluster Overview",
-      "uid": "k8s-overview",
-      "schemaVersion": 38,
-      "refresh": "30s",
+      "title": "Kubernetes Cluster Overview", "uid": "k8s-overview",
+      "schemaVersion": 38, "refresh": "30s",
       "panels": [
-        {
-          "id": 1,
-          "title": "Pod Restart Count (Namespace: app)",
-          "type": "stat",
-          "gridPos": {"x": 0, "y": 0, "w": 6, "h": 4},
-          "targets": [{
-            "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"app\"}[1h]))",
-            "legendFormat": "restarts (1h)"
-          }],
-          "fieldConfig": {
-            "defaults": {
-              "thresholds": {"steps": [
-                {"value": 0, "color": "green"},
-                {"value": 1, "color": "yellow"},
-                {"value": 5, "color": "red"}
-              ]}
-            }
-          }
-        },
-        {
-          "id": 2,
-          "title": "Node CPU Usage %",
-          "type": "timeseries",
-          "gridPos": {"x": 6, "y": 0, "w": 9, "h": 4},
-          "targets": [{
-            "expr": "100 - (avg by(node) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)",
-            "legendFormat": "{{ node }}"
-          }]
-        },
-        {
-          "id": 3,
-          "title": "Node Memory Usage %",
-          "type": "timeseries",
-          "gridPos": {"x": 15, "y": 0, "w": 9, "h": 4},
-          "targets": [{
-            "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100",
-            "legendFormat": "{{ instance }}"
-          }]
-        },
-        {
-          "id": 4,
-          "title": "Total Pods (all namespaces)",
-          "type": "stat",
-          "gridPos": {"x": 0, "y": 4, "w": 4, "h": 3},
-          "targets": [{
-            "expr": "count(kube_pod_status_phase{phase=\"Running\"})"
-          }]
-        },
-        {
-          "id": 5,
-          "title": "Not Running Pods",
-          "type": "stat",
-          "gridPos": {"x": 4, "y": 4, "w": 4, "h": 3},
-          "targets": [{
-            "expr": "count(kube_pod_status_phase{phase!~\"Running|Succeeded\"})"
-          }]
-        }
+        { "id": 1, "title": "Pod Restarts (app)", "type": "stat",
+          "gridPos": {"x":0,"y":0,"w":6,"h":4},
+          "targets": [{"expr":"sum(increase(kube_pod_container_status_restarts_total{namespace=\"app\"}[1h]))"}] },
+        { "id": 2, "title": "Node CPU %", "type": "timeseries",
+          "gridPos": {"x":6,"y":0,"w":9,"h":4},
+          "targets": [{"expr":"100 - (avg by(node)(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))*100)","legendFormat":"{{ node }}"}] },
+        { "id": 3, "title": "Node Memory %", "type": "timeseries",
+          "gridPos": {"x":15,"y":0,"w":9,"h":4},
+          "targets": [{"expr":"(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)*100","legendFormat":"{{ instance }}"}] },
+        { "id": 4, "title": "Running Pods", "type": "stat",
+          "gridPos": {"x":0,"y":4,"w":4,"h":3},
+          "targets": [{"expr":"count(kube_pod_status_phase{phase=\"Running\"})"}] }
       ]
     }
 ```
@@ -1951,82 +1304,52 @@ kind: ConfigMap
 metadata:
   name: app-metrics-dashboard
   namespace: monitoring
-  labels:
-    grafana_dashboard: "1"
+  labels: { grafana_dashboard: "1" }
 data:
   app-metrics.json: |
     {
-      "title": "query-param-app — RED Metrics",
-      "uid": "dreamgames-app",
-      "schemaVersion": 38,
-      "refresh": "30s",
+      "title": "query-param-app — RED Metrics", "uid": "dreamgames-app",
+      "schemaVersion": 38, "refresh": "30s",
       "panels": [
-        {
-          "id": 1, "title": "Request Rate (RPS)", "type": "timeseries",
-          "gridPos": {"x": 0, "y": 0, "w": 8, "h": 8},
-          "targets": [{"expr": "sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m])) by (uri)", "legendFormat": "{{ uri }}"}]
-        },
-        {
-          "id": 2, "title": "Error Rate (5xx %)", "type": "timeseries",
-          "gridPos": {"x": 8, "y": 0, "w": 8, "h": 8},
-          "targets": [{"expr": "sum(rate(http_server_requests_seconds_count{namespace=\"app\",status=~\"5..\"}[2m])) / sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m])) * 100", "legendFormat": "5xx %"}]
-        },
-        {
-          "id": 3, "title": "Latency p50/p95/p99", "type": "timeseries",
-          "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
-          "targets": [
-            {"expr": "histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))", "legendFormat": "p50"},
-            {"expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))", "legendFormat": "p95"},
-            {"expr": "histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))", "legendFormat": "p99"}
-          ]
-        },
-        {
-          "id": 4, "title": "HPA Current/Max Replicas", "type": "stat",
-          "gridPos": {"x": 0, "y": 8, "w": 6, "h": 4},
-          "targets": [
-            {"expr": "kube_horizontalpodautoscaler_status_current_replicas{namespace=\"app\"}", "legendFormat": "current"},
-            {"expr": "kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"app\"}", "legendFormat": "max"}
-          ]
-        },
-        {
-          "id": 5, "title": "CPU Usage (millicores)", "type": "timeseries",
-          "gridPos": {"x": 6, "y": 8, "w": 9, "h": 4},
-          "targets": [{"expr": "sum(rate(container_cpu_usage_seconds_total{namespace=\"app\",container=\"query-param-app\"}[2m])) by (pod) * 1000", "legendFormat": "{{ pod }}"}]
-        },
-        {
-          "id": 6, "title": "Memory Usage", "type": "timeseries",
-          "gridPos": {"x": 15, "y": 8, "w": 9, "h": 4},
-          "targets": [{"expr": "sum(container_memory_working_set_bytes{namespace=\"app\",container=\"query-param-app\"}) by (pod)", "legendFormat": "{{ pod }}"}]
-        }
+        { "id":1,"title":"Request Rate (RPS)","type":"timeseries","gridPos":{"x":0,"y":0,"w":8,"h":8},
+          "targets":[{"expr":"sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m])) by (uri)","legendFormat":"{{ uri }}"}] },
+        { "id":2,"title":"Error Rate (5xx %)","type":"timeseries","gridPos":{"x":8,"y":0,"w":8,"h":8},
+          "targets":[{"expr":"sum(rate(http_server_requests_seconds_count{namespace=\"app\",status=~\"5..\"}[2m])) / sum(rate(http_server_requests_seconds_count{namespace=\"app\"}[2m]))*100","legendFormat":"5xx %"}] },
+        { "id":3,"title":"Latency p50/p95/p99","type":"timeseries","gridPos":{"x":16,"y":0,"w":8,"h":8},
+          "targets":[
+            {"expr":"histogram_quantile(0.50, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))","legendFormat":"p50"},
+            {"expr":"histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))","legendFormat":"p95"},
+            {"expr":"histogram_quantile(0.99, sum(rate(http_server_requests_seconds_bucket{namespace=\"app\"}[2m])) by (le))","legendFormat":"p99"}
+          ] },
+        { "id":4,"title":"HPA Current/Max","type":"stat","gridPos":{"x":0,"y":8,"w":6,"h":4},
+          "targets":[
+            {"expr":"kube_horizontalpodautoscaler_status_current_replicas{namespace=\"app\"}","legendFormat":"current"},
+            {"expr":"kube_horizontalpodautoscaler_spec_max_replicas{namespace=\"app\"}","legendFormat":"max"}
+          ] }
       ]
     }
 ```
 
 ```bash
 kubectl apply -f kubernetes/monitoring/grafana-dashboards/
-
-GRAFANA_PASS=$(kubectl get secret grafana-admin-secret -n monitoring \
-  -o jsonpath='{.data.admin-password}' | base64 -d)
-echo "Grafana: http://monitoring.example.com/grafana | admin / $GRAFANA_PASS"
+GRAFANA_PASS=$(kubectl get secret grafana-admin-secret -n monitoring -o jsonpath='{.data.admin-password}' | base64 -d)
+echo "Grafana: http://monitoring.example.com/grafana  admin / $GRAFANA_PASS"
 ```
 
----
-
-## Bölüm 8 — Log Aggregation
-
-### Adım 29: ECK Elasticsearch
+#### 1.6d: Elasticsearch (ECK) + Fluent Bit (Logları ES'e Forward)
 
 ```bash
+# ECK Operator
 kubectl create -f https://download.elastic.co/downloads/eck/2.11.1/crds.yaml
 kubectl apply  -f https://download.elastic.co/downloads/eck/2.11.1/operator.yaml
 ```
 
-`kubernetes/monitoring/elasticsearch/eck-operator.yaml`:
+`kubernetes/monitoring/elasticsearch/elasticsearch.yaml`:
 ```yaml
 apiVersion: elasticsearch.k8s.elastic.co/v1
 kind: Elasticsearch
 metadata:
-  name: dreamgames
+  name: elasticsearch
   namespace: monitoring
 spec:
   version: 8.12.0
@@ -2040,50 +1363,44 @@ spec:
           containers:
             - name: elasticsearch
               resources:
-                requests:
-                  memory: 1Gi
-                  cpu: 500m
-                limits:
-                  memory: 2Gi
+                requests: { memory: 1Gi, cpu: 250m }
+                limits:   { memory: 1Gi }
+              env:
+                - name: ES_JAVA_OPTS
+                  value: "-Xms512m -Xmx512m"
 ```
 
 ```bash
-kubectl apply -f kubernetes/monitoring/elasticsearch/eck-operator.yaml
-kubectl get elasticsearch -n monitoring   # health: green beklenir (5-10 dk)
-```
+kubectl apply -f kubernetes/monitoring/elasticsearch/elasticsearch.yaml
+kubectl get elasticsearch -n monitoring   # health: green (5-10 dk)
 
-### Adım 30: Fluent Bit (Uygulama loglarını ES'e gönder)
-
-```bash
-ELASTIC_PASS=$(kubectl get secret dreamgames-es-elastic-user -n monitoring \
-  -o jsonpath='{.data.elastic}' | base64 -d)
-
-kubectl create secret generic elastic-credentials -n monitoring \
-  --from-literal=ELASTIC_PASSWORD="$ELASTIC_PASS"
+# ES şifresini fluent-bit için secret'a aktar
+ELASTIC_PASS=$(kubectl get secret elasticsearch-es-elastic-user -n monitoring -o jsonpath='{.data.elastic}' | base64 -d)
+kubectl create secret generic elastic-credentials -n monitoring --from-literal=ELASTIC_PASSWORD="$ELASTIC_PASS"
 ```
 
 `kubernetes/monitoring/fluent-bit/values.yaml`:
 ```yaml
+resources:
+  requests: { cpu: 25m, memory: 64Mi }
 config:
   inputs: |
     [INPUT]
         Name              tail
         Path              /var/log/containers/query-param-app*.log
-        Parser            docker
+        Parser            cri
         Tag               app.*
         Refresh_Interval  5
-
   filters: |
     [FILTER]
         Name    kubernetes
         Match   app.*
         Merge_Log On
-
   outputs: |
     [OUTPUT]
         Name            es
         Match           app.*
-        Host            dreamgames-es-http.monitoring.svc.cluster.local
+        Host            elasticsearch-es-http.monitoring.svc.cluster.local
         Port            9200
         HTTP_User       elastic
         HTTP_Passwd     ${ELASTIC_PASSWORD}
@@ -2094,27 +1411,575 @@ config:
 ```
 
 ```bash
-helm repo add fluent https://fluent.github.io/helm-charts
-helm install fluent-bit fluent/fluent-bit \
-  -n monitoring \
+helm repo add fluent https://fluent.github.io/helm-charts && helm repo update
+helm install fluent-bit fluent/fluent-bit -n monitoring \
   -f kubernetes/monitoring/fluent-bit/values.yaml \
   --set envFrom[0].secretRef.name=elastic-credentials
+
+# Doğrula: ES'te app-logs index'i oluştu mu?
+curl -sk -u elastic:$ELASTIC_PASS http://monitoring.example.com/elasticsearch/_cat/indices | grep app-logs
 ```
+
+> 💾 **Faz 6 sonu:** Logların ES'e aktığını doğrula/screenshot al, sonra RAM boşalt:
+> `helm uninstall fluent-bit -n monitoring && kubectl delete elasticsearch elasticsearch -n monitoring`
+
+📖 kube-prometheus-stack: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
+📖 ECK: https://www.elastic.co/guide/en/cloud-on-k8s/current/
+📖 Fluent Bit: https://docs.fluentbit.io/manual/
 
 ---
 
-## Bölüm 9 — Admission Webhook
+### Step 1.7: Asenkron Dosya Logging
 
-### Case Study Ne İstiyor?
+#### Case Study Ne İstiyor?
 
-> *"Write a custom validation webhook that fails if a deployment does not specify required
-> CPU and memory resource requests."*
-> *"Use a configmap to specify in which namespaces this validation webhook runs."* ← kritik!
-> *"Webhook should expose its metrics to Prometheus."*
+> *"Printing logs to stdout negatively impacts performance. Please explain how you would design
+> and implement the following:*
+> *a. Write application logs to a file asynchronously.*
+> *b. Ensure the log file size does not exceed 1GB.*
+> *c. Rotate log files daily."*
 
-### Adım 31: Go Webhook Kodu
+#### Tasarım Açıklaması
 
-Namespace listesi ConfigMap'ten okunacak — hardcode değil.
+Senkron stdout logging: her log satırı I/O bekler → yüksek trafikte ana thread bloklanır, response
+time artar. **Çözüm:** Logback `AsyncAppender` ile loglar bir kuyruğa yazılır, ayrı bir thread
+dosyaya yazar → ana thread bloklanmaz. `SizeAndTimeBasedRollingPolicy` ile dosya 1GB'ı geçince
+ve her gün yeni dosyaya döner. Fluent Bit bu dosyayı (veya container log'unu) okuyup ES'e taşır.
+
+#### Nasıl Yapılır?
+
+`app/src/main/resources/logback-spring.xml`:
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+  <!-- Dosyaya yazan rolling appender -->
+  <appender name="FILE_SYNC" class="ch.qos.logback.core.rolling.RollingFileAppender">
+    <file>/app/logs/application.log</file>
+    <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+      <!-- 7c: günlük rotation + 7b: 1GB boyut limiti -->
+      <fileNamePattern>/app/logs/application.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+      <maxFileSize>1GB</maxFileSize>
+      <maxHistory>30</maxHistory>
+      <totalSizeCap>10GB</totalSizeCap>
+    </rollingPolicy>
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+  </appender>
+
+  <!-- 7a: AsyncAppender — log yazma ayrı thread'de, ana thread bloklanmaz -->
+  <appender name="FILE_ASYNC" class="ch.qos.logback.classic.AsyncAppender">
+    <queueSize>1024</queueSize>
+    <discardingThreshold>0</discardingThreshold>
+    <appender-ref ref="FILE_SYNC"/>
+  </appender>
+
+  <!-- stdout (geçiş dönemi / debug için; performans için kapatılabilir) -->
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder"/>
+  </appender>
+
+  <root level="INFO">
+    <appender-ref ref="FILE_ASYNC"/>
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>
+```
+
+> **stdout'u tamamen kaldırmak isterseniz** (case study'nin "stdout performansı düşürüyor"
+> gözlemi): `<root>`'tan `STDOUT` ref'ini çıkarın ve Fluent Bit'i app pod'una **sidecar** olarak
+> ekleyip `/app/logs/application.log` dosyasını tail edin (emptyDir paylaşımlı volume). Böylece
+> hiç stdout yazılmaz, sadece async dosya logging kalır.
+
+Bu değişiklikten sonra imajı yeniden derle ve yeni tag ile push et (Step 2.2 pipeline bunu yapar):
+```bash
+cd app && mvn clean package -DskipTests
+docker build -t dreamgames/query-param-app:1.1.0 . && docker push dreamgames/query-param-app:1.1.0 && cd ..
+```
+
+📖 Logback AsyncAppender: https://logback.qos.ch/manual/appenders.html#AsyncAppender
+📖 SizeAndTimeBasedRollingPolicy: https://logback.qos.ch/manual/appenders.html#SizeAndTimeBasedRollingPolicy
+
+---
+
+## Step 2: Deployment ve Pipeline'lar
+
+### Step 2.1: Uygulamayı Kubernetes'e Deploy Et
+
+#### Case Study Ne İstiyor?
+
+> *"The application should be deployed on both worker nodes with a minimum of 4 pods, and the
+> service should be load-balanced using Nginx.*
+> *a. Ensure that pods are evenly distributed across the nodes.*
+> *b. Verify that the application starts receiving requests as soon as it is ready and is
+>    restarted automatically if any issues arise."*
+
+> ⚠️ **Faz 2.** Bu çekirdek demo kalıcı çalışır.
+
+#### Namespace'ler + Pod Security Admission
+
+`kubernetes/namespaces/namespaces.yaml`:
+```yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    pod-security.kubernetes.io/enforce: restricted   # root yasak, privilege escalation yasak
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    pod-security.kubernetes.io/enforce: baseline     # node-exporter hostNetwork ister
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: jenkins
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: webhook-system
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+```
+
+`kubernetes/app/serviceaccount.yaml`:
+```yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: query-param-app
+  namespace: app
+automountServiceAccountToken: false   # Uygulama K8s API'ye erişmez → saldırı yüzeyi azalır
+```
+
+#### Deployment (4 pod, eşit dağılım, readiness, auto-restart)
+
+`kubernetes/app/deployment.yaml`:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: query-param-app
+  namespace: app
+spec:
+  replicas: 4                       # Case study: minimum 4 pod
+  selector:
+    matchLabels: { app: query-param-app }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0             # Zero-downtime (Step 2.3c)
+  template:
+    metadata:
+      labels: { app: query-param-app }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: "/actuator/prometheus"
+    spec:
+      serviceAccountName: query-param-app
+      # 2.1a: pod'ları worker1 + worker2'ye eşit dağıt
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels: { app: query-param-app }
+      containers:
+        - name: query-param-app
+          image: dreamgames/query-param-app:1.1.0
+          ports:
+            - { containerPort: 8080, name: http }
+            - { containerPort: 9090, name: management }
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }   # Dar M4 ortamı: 4×128Mi=512Mi
+            limits:   { cpu: 500m, memory: 256Mi }
+          # JVM yavaş boot edebilir (dar RAM) → startupProbe grace verir
+          startupProbe:
+            httpGet: { path: /actuator/health/readiness, port: 9090 }
+            failureThreshold: 30
+            periodSeconds: 5         # 150 sn boot süresi toleransı
+          # 2.1b: hazır olana kadar trafik gelmesin
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 9090 }
+            periodSeconds: 5
+            failureThreshold: 3
+          # 2.1b: cevap vermezse otomatik restart
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 9090 }
+            periodSeconds: 10
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec: { command: ["sh", "-c", "sleep 5"] }   # uçuştaki istekler bitsin
+          volumeMounts:
+            - { name: logs, mountPath: /app/logs }
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
+      volumes:
+        - name: logs
+          emptyDir: {}
+```
+
+#### Service (Nginx LB), HPA, PDB, Ingress, NetworkPolicy
+
+`kubernetes/app/service.yaml`:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: query-param-app
+  namespace: app
+spec:
+  selector: { app: query-param-app }
+  ports:
+    - { name: http, port: 80, targetPort: 8080 }
+    - { name: management, port: 9090, targetPort: 9090 }
+```
+
+`kubernetes/app/hpa.yaml`:
+```yaml
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: query-param-app
+  namespace: app
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: query-param-app }
+  minReplicas: 4
+  maxReplicas: 16
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies: [{ type: Pods, value: 2, periodSeconds: 60 }]
+```
+
+`kubernetes/app/pdb.yaml`:
+```yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: query-param-app
+  namespace: app
+spec:
+  selector:
+    matchLabels: { app: query-param-app }
+  maxUnavailable: 1
+```
+
+`kubernetes/app/ingress.yaml` (2.3b hostname Ingress):
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: query-param-app
+  namespace: app
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: app.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: query-param-app, port: { number: 80 } } }
+```
+
+`kubernetes/app/networkpolicy.yaml`:
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: query-param-app-allow
+  namespace: app
+spec:
+  podSelector:
+    matchLabels: { app: query-param-app }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: ingress-nginx } } }]
+      ports: [{ port: 8080 }]
+    - from: [{ namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: monitoring } } }]
+      ports: [{ port: 9090 }]
+  egress:
+    - to: [{ namespaceSelector: {} }]
+      ports:
+        - { port: 53, protocol: UDP }
+        - { port: 53, protocol: TCP }
+```
+
+#### Deploy ve Doğrula
+
+```bash
+kubectl apply -f kubernetes/namespaces/namespaces.yaml
+kubectl apply -f kubernetes/app/
+
+kubectl rollout status deployment/query-param-app -n app --timeout=180s
+
+# 2.1a: eşit dağılım — worker1 ve worker2'de pod olmalı
+kubectl get pods -n app -o wide
+
+# Nginx üzerinden load-balanced erişim
+curl 'http://app.example.com/api/echo?hello=world'   # → {"hello":"world"}
+
+# 2.1b: auto-restart testi — bir pod'u öldür, otomatik geri gelsin
+kubectl delete pod -n app -l app=query-param-app | head -1
+kubectl get pods -n app -w   # yeni pod Running olur
+```
+
+📖 topologySpreadConstraints: https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/
+📖 Probes: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
+
+---
+
+### Step 2.2: Build Pipeline
+
+#### Case Study Ne İstiyor?
+
+> *"Create a build pipeline for the application using a Jenkinsfile.*
+> *a. Ensure that the built Container image is deployed to the Registry."*
+
+#### Nasıl Yapılır?
+
+`jenkins/Jenkinsfile.build`:
+```groovy
+pipeline {
+    agent any
+    environment {
+        IMAGE_NAME = "dreamgames/query-param-app"
+        // :latest KULLANMA — mutable tag, hangi kod çalıştığı bilinmez
+        IMAGE_TAG  = "${BUILD_NUMBER}-${GIT_COMMIT.take(7)}"
+    }
+    stages {
+        stage('Checkout') { steps { checkout scm } }
+        stage('Unit Test') { steps { dir('app') { sh 'mvn clean test -q' } } }
+        stage('Build JAR') { steps { dir('app') { sh 'mvn clean package -DskipTests -q' } } }
+        stage('Build Image') { steps { dir('app') { sh "docker build -t ${IMAGE_NAME}:${IMAGE_TAG} ." } } }
+        stage('Security Scan') {
+            // Trivy: HIGH/CRITICAL CVE varsa pipeline durur, imaj push edilmez
+            steps {
+                sh """
+                    docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+                      aquasec/trivy:latest image --exit-code 1 \
+                      --severity HIGH,CRITICAL --no-progress ${IMAGE_NAME}:${IMAGE_TAG}
+                """
+            }
+        }
+        stage('Push to Registry') {        // case study 2.2a
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+                    sh """
+                        echo \$DOCKER_PASS | docker login -u \$DOCKER_USER --password-stdin
+                        docker push ${IMAGE_NAME}:${IMAGE_TAG}
+                        docker logout
+                    """
+                }
+            }
+        }
+    }
+    post { always { sh "docker rmi ${IMAGE_NAME}:${IMAGE_TAG} || true" } }
+}
+```
+
+Jenkins UI'da: **New Item → Pipeline → Pipeline script from SCM → Git → Script Path:
+`jenkins/Jenkinsfile.build`**. Çalıştır → imaj DockerHub'a push olur.
+
+📖 Jenkins Pipeline: https://www.jenkins.io/doc/book/pipeline/
+📖 Trivy: https://aquasecurity.github.io/trivy/
+
+---
+
+### Step 2.3: Deploy Pipeline (Ansible)
+
+#### Case Study Ne İstiyor?
+
+> *"Create a deployment pipeline for the application using a Jenkinsfile.*
+> *a. Use Ansible to apply Kubernetes manifests.*
+> *b. The application should be accessible via its hostname using an Ingress.*
+> *c. Describe your approach for achieving zero-downtime deployments."*
+
+> ⚠️ **2.3a kritik:** Deploy `kubectl apply` ile değil, **Ansible** ile yapılmalı.
+
+#### Ansible Deploy Playbook
+
+`ansible/deploy-app.yml`:
+```yaml
+---
+- name: Deploy query-param-app to Kubernetes
+  hosts: master
+  become: false
+  vars:
+    app_namespace: "{{ app_namespace | default('app') }}"
+    docker_user:   "{{ docker_user | default('dreamgames') }}"
+    image_tag:     "{{ image_tag | default('latest') }}"
+  tasks:
+    - name: Manifest'leri uygula (Ansible k8s modülü)
+      kubernetes.core.k8s:
+        state: present
+        src: "{{ item }}"
+      loop:
+        - kubernetes/app/serviceaccount.yaml
+        - kubernetes/app/service.yaml
+        - kubernetes/app/hpa.yaml
+        - kubernetes/app/pdb.yaml
+        - kubernetes/app/ingress.yaml
+        - kubernetes/app/networkpolicy.yaml
+
+    - name: Deployment image'ını güncelle
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata: { name: query-param-app, namespace: "{{ app_namespace }}" }
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: query-param-app
+                    image: "{{ docker_user }}/query-param-app:{{ image_tag }}"
+
+    - name: Rollout durumu kontrol
+      command: kubectl rollout status deployment/query-param-app -n {{ app_namespace }} --timeout=5m
+      register: rollout_result
+      failed_when: rollout_result.rc != 0
+
+    - name: Rollback (rollout başarısızsa)
+      command: kubectl rollout undo deployment/query-param-app -n {{ app_namespace }}
+      when: rollout_result.rc != 0
+```
+
+#### Deploy Jenkinsfile
+
+`jenkins/Jenkinsfile.deploy`:
+```groovy
+pipeline {
+    agent {
+        kubernetes {
+            yaml """
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: ansible
+    image: cytopia/ansible:2.15-tools
+    command: ['sleep', '99d']
+    resources: { requests: { cpu: 200m, memory: 256Mi } }
+  - name: kubectl
+    image: bitnami/kubectl:1.32
+    command: ['sleep', '99d']
+    resources: { requests: { cpu: 100m, memory: 128Mi } }
+"""
+        }
+    }
+    parameters {
+        string(name: 'IMAGE_TAG', description: 'Deploy edilecek tag (örn: 42-abc1234)')
+        choice(name: 'ENVIRONMENT', choices: ['app', 'staging'], description: 'Hedef namespace')
+        booleanParam(name: 'DRY_RUN', defaultValue: false)
+    }
+    environment { KUBECONFIG = credentials('kubeconfig') }
+    stages {
+        stage('Checkout') { steps { checkout scm } }
+        stage('Validate Manifests') {
+            steps { container('kubectl') {
+                sh "kubectl apply -f kubernetes/app/ --dry-run=client -n ${params.ENVIRONMENT}"
+            } }
+        }
+        stage('Deploy via Ansible') {        // case study 2.3a
+            steps { container('ansible') {
+                sh """
+                    ansible-playbook ansible/deploy-app.yml \
+                      -i ansible/inventory/hosts.ini \
+                      -e image_tag=${params.IMAGE_TAG} \
+                      -e app_namespace=${params.ENVIRONMENT} \
+                      ${params.DRY_RUN ? '--check' : ''}
+                """
+            } }
+        }
+        stage('Smoke Test') {
+            when { not { expression { params.DRY_RUN } } }
+            steps { sh "sleep 10 && curl -sf http://app.example.com/api/echo?smoke=true | grep smoke" }
+        }
+    }
+    post {
+        failure { container('kubectl') {
+            sh "kubectl rollout undo deployment/query-param-app -n ${params.ENVIRONMENT} || true"
+        } }
+    }
+}
+```
+
+```bash
+# Jenkins deploy pipeline kubeconfig secret'ı (hardcode yasak)
+kubectl create secret generic kubeconfig --from-file=config=$KUBECONFIG -n jenkins
+```
+
+#### 2.3c: Zero-Downtime Yaklaşımı
+
+- `maxUnavailable: 0, maxSurge: 1` → önce yeni pod gelir, hazır olunca eski silinir → hiç kesinti yok.
+- `readinessProbe` → yeni pod hazır olana kadar Service trafiği göndermez.
+- `preStop: sleep 5` + `terminationGracePeriodSeconds: 30` → eski pod kapanırken uçuştaki istekler biter.
+- `PodDisruptionBudget` → drain sırasında bile minimum pod ayakta.
+
+Test:
+```bash
+# Terminal 1: sürekli istek
+while true; do curl -s -o /dev/null -w "%{http_code}\n" http://app.example.com/api/echo?x=1; sleep 0.3; done
+# Terminal 2: yeni versiyona geç → Terminal 1'de hep 200 görünmeli, 0 hata
+kubectl set image deployment/query-param-app query-param-app=dreamgames/query-param-app:1.1.0 -n app
+```
+
+**Neden Ansible, kubectl değil?** Case study istiyor; mantığı da var: Ansible idempotent,
+playbook tekrar çalıştırılabilir, cluster dışından (kubeconfig ile) çalışır → Jenkins'in K8s
+API'ye doğrudan erişmesi gerekmez.
+
+📖 Ansible kubernetes.core: https://docs.ansible.com/ansible/latest/collections/kubernetes/core/
+
+---
+
+### Step 2.4: Validation Webhook
+
+#### Case Study Ne İstiyor?
+
+> *"Write a custom validation webhook that fails if a deployment does not specify required CPU
+> and memory resource requests.*
+> *a. Use a configmap to specify in which namespaces this validation webhook runs.*
+> *b. Webhook should expose its metrics to Prometheus."*
+
+> ⚠️ **Faz 7** (hafif, kalıcı). Namespace listesi **ConfigMap'ten** okunur — hardcode değil.
+
+#### Go Webhook Kodu
 
 `webhook/main.go`:
 ```go
@@ -2130,10 +1995,10 @@ import (
     "os"
     "strings"
 
-    appsv1     "k8s.io/api/apps/v1"
     admissionv1 "k8s.io/api/admission/v1"
-    corev1     "k8s.io/api/core/v1"
-    metav1     "k8s.io/apimachinery/pkg/apis/meta/v1"
+    appsv1 "k8s.io/api/apps/v1"
+    corev1 "k8s.io/api/core/v1"
+    metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
     "k8s.io/apimachinery/pkg/runtime"
     "k8s.io/apimachinery/pkg/runtime/serializer"
 
@@ -2147,7 +2012,7 @@ var (
 
     validationsTotal = prometheus.NewCounterVec(
         prometheus.CounterOpts{Name: "webhook_validations_total"},
-        []string{"result"},    // "allowed" | "rejected"
+        []string{"result"}, // "allowed" | "rejected"
     )
 )
 
@@ -2157,19 +2022,16 @@ func init() {
     prometheus.MustRegister(validationsTotal)
 }
 
-// allowedNamespaces: ConfigMap volume mount'tan veya env var'dan okur
-// Case study: "Use a configmap to specify in which namespaces webhook runs"
-// Kubernetes/webhook/configmap.yaml → deployment'ta /etc/webhook/namespaces'e mount edilir
+// 2.4a: namespace listesini ConfigMap volume mount'tan oku (hardcode değil)
 func allowedNamespaces() map[string]bool {
     ns := os.Getenv("WEBHOOK_NAMESPACES")
     if ns == "" {
-        data, err := os.ReadFile("/etc/webhook/namespaces")
-        if err == nil {
+        if data, err := os.ReadFile("/etc/webhook/namespaces"); err == nil {
             ns = string(data)
         }
     }
     if ns == "" {
-        ns = "default,app"    // fallback
+        ns = "default,app"
     }
     result := make(map[string]bool)
     for _, n := range strings.Split(strings.TrimSpace(ns), ",") {
@@ -2179,16 +2041,16 @@ func allowedNamespaces() map[string]bool {
 }
 
 func checkContainers(containers []corev1.Container) []string {
-    var violations []string
+    var v []string
     for _, c := range containers {
         if c.Resources.Requests.Cpu().IsZero() {
-            violations = append(violations, fmt.Sprintf("container %q: resources.requests.cpu eksik", c.Name))
+            v = append(v, fmt.Sprintf("container %q: resources.requests.cpu eksik", c.Name))
         }
         if c.Resources.Requests.Memory().IsZero() {
-            violations = append(violations, fmt.Sprintf("container %q: resources.requests.memory eksik", c.Name))
+            v = append(v, fmt.Sprintf("container %q: resources.requests.memory eksik", c.Name))
         }
     }
-    return violations
+    return v
 }
 
 func handleValidate(w http.ResponseWriter, r *http.Request) {
@@ -2198,30 +2060,25 @@ func handleValidate(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "decode error", http.StatusBadRequest)
         return
     }
-
     review := obj.(*admissionv1.AdmissionReview)
     req := review.Request
 
-    // Sadece izinli namespace'leri denetle (ConfigMap'ten gelir)
-    if !allowedNamespaces()[req.Namespace] {
+    if !allowedNamespaces()[req.Namespace] {   // sadece izinli namespace'leri denetle
         respond(w, review, true, "")
         return
     }
-
     var deploy appsv1.Deployment
     if err := json.Unmarshal(req.Object.Raw, &deploy); err != nil {
         respond(w, review, true, "")
         return
     }
-
     var violations []string
     violations = append(violations, checkContainers(deploy.Spec.Template.Spec.Containers)...)
     violations = append(violations, checkContainers(deploy.Spec.Template.Spec.InitContainers)...)
 
     if len(violations) > 0 {
-        msg := "Deployment reddedildi — eksik resource request:\n" + strings.Join(violations, "\n")
         validationsTotal.WithLabelValues("rejected").Inc()
-        respond(w, review, false, msg)
+        respond(w, review, false, "Reddedildi — eksik resource request:\n"+strings.Join(violations, "\n"))
     } else {
         validationsTotal.WithLabelValues("allowed").Inc()
         respond(w, review, true, "")
@@ -2229,46 +2086,58 @@ func handleValidate(w http.ResponseWriter, r *http.Request) {
 }
 
 func respond(w http.ResponseWriter, review *admissionv1.AdmissionReview, allowed bool, msg string) {
-    resp := &admissionv1.AdmissionResponse{
-        UID:     review.Request.UID,
-        Allowed: allowed,
-    }
+    resp := &admissionv1.AdmissionResponse{UID: review.Request.UID, Allowed: allowed}
     if !allowed {
         resp.Result = &metav1.Status{Code: 422, Message: msg}
     }
     review.Response = resp
     w.Header().Set("Content-Type", "application/json")
-    json.NewEncoder(w).Encode(review)
+    _ = json.NewEncoder(w).Encode(review)
 }
 
 func main() {
-    certFile := "/etc/webhook/certs/tls.crt"
-    keyFile  := "/etc/webhook/certs/tls.key"
-
-    // Prometheus metrics — TLS değil, HTTP (case study: "expose metrics to Prometheus")
+    // 2.4b: Prometheus metrics — TLS değil, düz HTTP :8080
     go func() {
         mux := http.NewServeMux()
         mux.Handle("/metrics", promhttp.Handler())
         log.Fatal(http.ListenAndServe(":8080", mux))
     }()
 
-    // Validation endpoint — TLS (kube-apiserver TLS ister)
-    cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+    // Validation endpoint — TLS :8443 (kube-apiserver TLS ister)
+    cert, err := tls.LoadX509KeyPair("/etc/webhook/certs/tls.crt", "/etc/webhook/certs/tls.key")
     if err != nil {
-        log.Fatalf("TLS sertifikası yüklenemedi: %v", err)
+        log.Fatalf("TLS yüklenemedi: %v", err)
     }
-
     http.HandleFunc("/validate", handleValidate)
-    server := &http.Server{
-        Addr:      ":8443",
-        TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}},
-    }
-    log.Println("Webhook başlatıldı :8443 (TLS), :8080 (metrics)")
+    server := &http.Server{Addr: ":8443", TLSConfig: &tls.Config{Certificates: []tls.Certificate{cert}}}
+    log.Println("Webhook :8443 (TLS validate), :8080 (metrics)")
     log.Fatal(server.ListenAndServeTLS("", ""))
 }
 ```
 
-### Adım 32: Webhook ConfigMap
+`webhook/Dockerfile`:
+```dockerfile
+FROM golang:1.21-alpine AS builder
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /webhook .
+
+FROM scratch
+COPY --from=builder /webhook /webhook
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+USER 65534
+ENTRYPOINT ["/webhook"]
+```
+
+```bash
+cd webhook && go mod init webhook 2>/dev/null; go mod tidy
+go vet ./... && go build ./...
+docker build -t dreamgames/resource-webhook:1.0.0 . && docker push dreamgames/resource-webhook:1.0.0 && cd ..
+```
+
+#### Webhook ConfigMap (2.4a) + Deployment
 
 `kubernetes/webhook/configmap.yaml`:
 ```yaml
@@ -2278,13 +2147,9 @@ metadata:
   name: webhook-config
   namespace: webhook-system
 data:
-  # Bu listede olan namespace'lerdeki Deployment'lar denetlenir
-  # Listeyi güncellemek için: kubectl edit configmap webhook-config -n webhook-system
-  # Sonra webhook pod'larını restart et: kubectl rollout restart deployment/resource-webhook -n webhook-system
+  # Bu namespace'lerdeki Deployment'lar denetlenir. Güncelle → pod restart yeter (rebuild gerekmez)
   namespaces: "app,production,staging"
 ```
-
-### Adım 33: Webhook Deployment
 
 `kubernetes/webhook/deployment.yaml`:
 ```yaml
@@ -2296,65 +2161,82 @@ metadata:
 spec:
   replicas: 2
   selector:
-    matchLabels:
-      app: resource-webhook
+    matchLabels: { app: resource-webhook }
   template:
     metadata:
-      labels:
-        app: resource-webhook
+      labels: { app: resource-webhook }
       annotations:
-        prometheus.io/scrape: "true"
+        prometheus.io/scrape: "true"     # 2.4b
         prometheus.io/port: "8080"
     spec:
       containers:
         - name: resource-webhook
           image: dreamgames/resource-webhook:1.0.0
           ports:
-            - containerPort: 8443
-              name: https
-            - containerPort: 8080
-              name: metrics
+            - { containerPort: 8443, name: https }
+            - { containerPort: 8080, name: metrics }
           volumeMounts:
-            - name: certs
-              mountPath: /etc/webhook/certs
-              readOnly: true
-            - name: config
-              mountPath: /etc/webhook/namespaces
-              subPath: namespaces    # ConfigMap'ten namespace listesi
-              readOnly: true
+            - { name: certs, mountPath: /etc/webhook/certs, readOnly: true }
+            - { name: config, mountPath: /etc/webhook/namespaces, subPath: namespaces, readOnly: true }
           resources:
-            requests:
-              cpu: 50m
-              memory: 32Mi
-            limits:
-              cpu: 200m
-              memory: 128Mi
+            requests: { cpu: 50m, memory: 32Mi }
+            limits:   { cpu: 200m, memory: 128Mi }
           securityContext:
             runAsNonRoot: true
             runAsUser: 65534
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
-            capabilities:
-              drop: ["ALL"]
+            capabilities: { drop: ["ALL"] }
       volumes:
         - name: certs
-          secret:
-            secretName: resource-webhook-tls
+          secret: { secretName: resource-webhook-tls }
         - name: config
-          configMap:
-            name: webhook-config    # Namespace listesi buradan gelir
+          configMap: { name: webhook-config }     # namespace listesi buradan gelir
 ```
 
-### Adım 34: TLS ve Deploy
+`kubernetes/webhook/service.yaml`:
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: resource-webhook
+  namespace: webhook-system
+spec:
+  selector: { app: resource-webhook }
+  ports:
+    - { name: https, port: 443, targetPort: 8443 }
+    - { name: metrics, port: 8080, targetPort: 8080 }
+```
+
+`kubernetes/webhook/validatingwebhookconfiguration.yaml`:
+```yaml
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: resource-requests-webhook
+webhooks:
+  - name: resource-requests.dreamgames.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: Fail
+    clientConfig:
+      service: { name: resource-webhook, namespace: webhook-system, path: /validate, port: 443 }
+      caBundle: ""        # generate-certs.sh dolduracak
+    rules:
+      - apiGroups: ["apps"]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["deployments"]
+```
+
+#### TLS + Deploy
 
 `kubernetes/webhook/tls/generate-certs.sh`:
 ```bash
 #!/bin/bash
 set -e
-NAMESPACE="webhook-system"
-SERVICE="resource-webhook"
-TMPDIR=$(mktemp -d)
-trap "rm -rf $TMPDIR" EXIT
+NAMESPACE="webhook-system"; SERVICE="resource-webhook"
+TMPDIR=$(mktemp -d); trap "rm -rf $TMPDIR" EXIT
 
 openssl genrsa -out "$TMPDIR/ca.key" 2048
 openssl req -new -x509 -days 3650 -key "$TMPDIR/ca.key" -subj "/CN=webhook-ca" -out "$TMPDIR/ca.crt"
@@ -2363,40 +2245,26 @@ openssl req -new -key "$TMPDIR/tls.key" -subj "/CN=${SERVICE}.${NAMESPACE}.svc" 
 cat > "$TMPDIR/san.conf" << EOF
 subjectAltName = DNS:${SERVICE}.${NAMESPACE}.svc,DNS:${SERVICE}.${NAMESPACE}.svc.cluster.local
 EOF
-openssl x509 -req -days 3650 -in "$TMPDIR/tls.csr" \
-  -CA "$TMPDIR/ca.crt" -CAkey "$TMPDIR/ca.key" -CAcreateserial \
-  -extfile "$TMPDIR/san.conf" -out "$TMPDIR/tls.crt"
+openssl x509 -req -days 3650 -in "$TMPDIR/tls.csr" -CA "$TMPDIR/ca.crt" -CAkey "$TMPDIR/ca.key" \
+  -CAcreateserial -extfile "$TMPDIR/san.conf" -out "$TMPDIR/tls.crt"
 
-kubectl create secret tls resource-webhook-tls \
-  --cert="$TMPDIR/tls.crt" --key="$TMPDIR/tls.key" \
+kubectl create secret tls resource-webhook-tls --cert="$TMPDIR/tls.crt" --key="$TMPDIR/tls.key" \
   -n "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
 CA_BUNDLE=$(base64 < "$TMPDIR/ca.crt" | tr -d '\n')
-kubectl patch validatingwebhookconfiguration resource-requests-webhook \
-  --type='json' \
+kubectl patch validatingwebhookconfiguration resource-requests-webhook --type='json' \
   -p="[{\"op\":\"replace\",\"path\":\"/webhooks/0/clientConfig/caBundle\",\"value\":\"${CA_BUNDLE}\"}]"
 echo "Done."
 ```
 
 ```bash
-kubectl create namespace webhook-system
 kubectl apply -f kubernetes/webhook/configmap.yaml
-kubectl apply -f kubernetes/webhook/rbac.yaml
 kubectl apply -f kubernetes/webhook/deployment.yaml
 kubectl apply -f kubernetes/webhook/service.yaml
 kubectl apply -f kubernetes/webhook/validatingwebhookconfiguration.yaml
-
-chmod +x kubernetes/webhook/tls/generate-certs.sh
-bash kubernetes/webhook/tls/generate-certs.sh
-
+chmod +x kubernetes/webhook/tls/generate-certs.sh && bash kubernetes/webhook/tls/generate-certs.sh
 kubectl get pods -n webhook-system   # 2 pod Running
 ```
-
-**Neden ConfigMap'ten namespace oku?**
-
-Case study açıkça istiyor. Ama mantığı da var: hardcoded list → kodu değiştirmeden
-namespace ekle/sil istersen imaj rebuild gerekir. ConfigMap → `kubectl edit` → restart
-yeterli. Operasyonel esneklik.
 
 **Test:**
 ```bash
@@ -2404,158 +2272,154 @@ yeterli. Operasyonel esneklik.
 kubectl apply -n app -f - << 'EOF'
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: bad-deploy
+metadata: { name: bad-deploy }
 spec:
   replicas: 1
-  selector:
-    matchLabels: { app: bad }
+  selector: { matchLabels: { app: bad } }
   template:
-    metadata:
-      labels: { app: bad }
+    metadata: { labels: { app: bad } }
     spec:
       containers:
-        - name: nginx
-          image: nginx
-          # resources: YOK
+        - { name: nginx, image: nginx }   # resources YOK
 EOF
-# Beklenen: "admission webhook denied the request"
+# Beklenen: admission webhook ... denied the request
 
-# ConfigMap'e yeni namespace ekle (kod değişikliği gerekmez!)
-kubectl patch configmap webhook-config -n webhook-system \
-  --type='json' \
+# 2.4a esnekliği: namespace ekle (kod değişmeden!)
+kubectl patch configmap webhook-config -n webhook-system --type=json \
   -p='[{"op":"replace","path":"/data/namespaces","value":"app,production,staging,test"}]'
 kubectl rollout restart deployment/resource-webhook -n webhook-system
 ```
 
+📖 Admission Webhooks: https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/
+📖 Prometheus Go client: https://github.com/prometheus/client_golang
+
 ---
 
-## Bölüm 10 — İleri Senaryolar (Step 3)
+## Step 3: Kaynak ve Ölçekleme Senaryoları
 
-### Senaryo 1: PriorityClass (App X vs App Y)
+> Bu adımlar manifest + tasarım açıklaması ister. Manifest'leri kısa süre apply edip doğrula,
+> sonra sil (faz faz). Yazılı yanıtları `docs/design-answers/` altına da koy.
 
-Case study: *"App X: real-time, high availability. App Y: batch, can be killed."*
+### Step 3.1: App X / App Y Kaynak Yönetimi
+
+#### Case Study Ne İstiyor?
+
+> *"Our cluster has a limited number of nodes... App X: real-time, high availability. App Y: batch,
+> can be killed or paused. How would you ensure App X scales effectively under heavy load while
+> considering limited resources and App Y? Please share your sample manifest file."*
+
+#### Çözüm: PriorityClass + QoS
+
+Node baskısında Kubernetes pod tahliye eder. Sıra: **BestEffort → Burstable → Guaranteed**.
+App X'i **Guaranteed** (requests == limits) + yüksek **PriorityClass** yaparız → asla tahliye
+edilmez, yer gerekirse scheduler App Y'yi (düşük priority, Burstable) evict eder.
 
 `step3-manifests/priority-classes.yaml`:
 ```yaml
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
-metadata:
-  name: high-priority-realtime
+metadata: { name: high-priority-realtime }
 value: 1000
 globalDefault: false
 description: "App X — gerçek zamanlı, tahliye edilemez"
 ---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
-metadata:
-  name: low-priority-batch
+metadata: { name: low-priority-batch }
 value: 100
 globalDefault: false
-description: "App Y — batch, kaynak baskısında tahliye edilebilir"
+description: "App Y — batch, baskıda tahliye edilebilir"
 ```
 
 `step3-manifests/app-x-deployment.yaml`:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: app-realtime
-  namespace: app
+metadata: { name: app-realtime, namespace: app }
 spec:
   replicas: 2
-  selector:
-    matchLabels:
-      app: app-realtime
+  selector: { matchLabels: { app: app-realtime } }
   template:
-    metadata:
-      labels:
-        app: app-realtime
+    metadata: { labels: { app: app-realtime } }
     spec:
       priorityClassName: high-priority-realtime
       containers:
         - name: app
           image: nginx:alpine
           resources:
-            requests:
-              cpu: 200m
-              memory: 128Mi
-            limits:
-              cpu: 200m      # requests == limits → Guaranteed QoS → asla tahliye edilmez
-              memory: 128Mi
+            requests: { cpu: 200m, memory: 128Mi }
+            limits:   { cpu: 200m, memory: 128Mi }   # requests==limits → Guaranteed QoS
 ```
 
 `step3-manifests/app-y-deployment.yaml`:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: app-batch
-  namespace: app
+metadata: { name: app-batch, namespace: app }
 spec:
   replicas: 4
-  selector:
-    matchLabels:
-      app: app-batch
+  selector: { matchLabels: { app: app-batch } }
   template:
-    metadata:
-      labels:
-        app: app-batch
+    metadata: { labels: { app: app-batch } }
     spec:
       priorityClassName: low-priority-batch
       containers:
         - name: app
           image: nginx:alpine
           resources:
-            requests:
-              cpu: 100m
-              memory: 64Mi
-            limits:
-              cpu: 500m       # requests < limits → Burstable QoS → baskıda tahliye edilebilir
-              memory: 256Mi
+            requests: { cpu: 100m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }   # requests<limits → Burstable QoS
 ```
 
-**Neden QoS sınıfları önemli?**
+```bash
+kubectl apply -f step3-manifests/priority-classes.yaml
+kubectl apply -f step3-manifests/app-x-deployment.yaml
+kubectl apply -f step3-manifests/app-y-deployment.yaml
+kubectl get pods -n app -o wide
+# App X için HPA da eklenir (Step 2.1 HPA mantığı) → yük altında App X ölçeklenir,
+# kaynak yetmezse App Y evict edilir.
+```
 
-Node bellek baskısı altında Kubernetes pod tahliye eder. Sıra:
-1. BestEffort (requests/limits yok) → ilk tahliye
-2. Burstable (requests < limits) → ikinci
-3. Guaranteed (requests == limits) → asla tahliye edilmez
+📖 PriorityClass: https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/
+📖 QoS: https://kubernetes.io/docs/concepts/workloads/pods/pod-qos/
 
-App X Guaranteed, App Y Burstable → baskı altında App Y tahliye edilir, App X çalışmaya devam eder.
-PriorityClass ise scheduler'ın yeni pod için yer açmak için hangi pod'ları evict edeceğini belirler.
+---
 
-### Senaryo 2: KEDA ile Proaktif Ölçekleme
+### Step 3.2: Zamanlı Ölçekleme + Node Scaling
 
-Case study: *"Ensure the application scales out before peak periods."*
+#### Case Study Ne İstiyor?
+
+> *"Higher traffic during specific periods... users should not experience increased response times.*
+> *a. How would you ensure the application scale-out and scale-in appropriately before and after
+>    these periods?*
+> *b. If there aren't enough nodes, how would you increase the number of nodes before peak times
+>    without slowing down the system?"*
+
+#### 3.2a: KEDA ile Proaktif (Zamanlı) Pod Ölçekleme
+
+Standart HPA reaktiftir (yük başlayınca ölçekler, 2-5 dk gecikme). KEDA `CronTrigger` proaktiftir:
+yoğunluk gelmeden önce pod sayısını artırır.
 
 `step3-manifests/hpa-scheduled.yaml`:
 ```yaml
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
-metadata:
-  name: query-param-app-scheduled
-  namespace: app
+metadata: { name: query-param-app-scheduled, namespace: app }
 spec:
-  scaleTargetRef:
-    name: query-param-app
+  scaleTargetRef: { name: query-param-app }
   minReplicaCount: 4
   maxReplicaCount: 16
   triggers:
-    # Reaktif: CPU yükü arttığında ölçekle
-    - type: cpu
+    - type: cpu                       # reaktif taban
       metricType: Utilization
-      metadata:
-        value: "70"
-    # Proaktif: Sabah yoğunluğu öncesi 15 dk erken hazırlan (Europe/Istanbul UTC+3)
-    - type: cron
+      metadata: { value: "70" }
+    - type: cron                      # proaktif: sabah yoğunluğu öncesi
       metadata:
         timezone: Europe/Istanbul
-        start: "45 8 * * 1-5"    # Pazartesi-Cuma 08:45 → 12 pod hazır
-        end:   "0 11 * * 1-5"    # 11:00'de normal'e dön
+        start: "45 8 * * 1-5"         # Pzt-Cuma 08:45 → 12 pod hazır
+        end:   "0 11 * * 1-5"
         desiredReplicas: "12"
-    # Öğle yoğunluğu
-    - type: cron
+    - type: cron                      # öğle yoğunluğu
       metadata:
         timezone: Europe/Istanbul
         start: "45 11 * * 1-5"
@@ -2564,57 +2428,94 @@ spec:
 ```
 
 ```bash
-# Standart HPA'yı sil (KEDA ve HPA çakışır)
-kubectl delete hpa query-param-app -n app
-
-helm repo add kedacore https://kedacore.github.io/charts
+kubectl delete hpa query-param-app -n app   # KEDA ile HPA çakışır
+helm repo add kedacore https://kedacore.github.io/charts && helm repo update
 helm install keda kedacore/keda --namespace keda --create-namespace --wait
 kubectl apply -f step3-manifests/hpa-scheduled.yaml
 ```
 
-**Neden Standart HPA yeterli değil?**
-HPA reaktif: yoğunluk başladıktan sonra ölçekler (2-5 dk gecikme). Yeni pod'lar
-schedule + başlatılırken kullanıcılar yavaşlık yaşar. KEDA CronTrigger proaktif:
-08:45'te yoğunluk gelmeden pod sayısını artırır, 09:00'da trafik geldiğinde hazır.
+#### 3.2b: Node'ları Peak Öncesi Artırma (Cluster Autoscaler / Karpenter)
 
-### Senaryo 3: Canary Deployment
+Pod'lar arttığında node yetmezse **Cluster Autoscaler** otomatik node ekler. "Sistemi
+yavaşlatmadan peak öncesi" için iki teknik:
+
+1. **Pause-pod / overprovisioning:** Düşük öncelikli "balon" pod'lar boş node'larda yer tutar.
+   Gerçek pod gelince balon evict olur, yeni node hazır beklerken anında schedule edilir.
+2. **Scheduled scaling of the node group:** KEDA Cron veya CronJob ile peak'ten 15 dk önce node
+   grubu min-size'ı artırılır (cloud'da ASG/MIG desired count; bare-metal'de hazır node'u join et).
+
+`step3-manifests/overprovisioning.yaml` (balon pod örneği):
+```yaml
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata: { name: overprovisioning }
+value: -10                            # negatif → en önce evict edilir
+globalDefault: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: overprovisioning, namespace: kube-system }
+spec:
+  replicas: 2
+  selector: { matchLabels: { app: overprovisioning } }
+  template:
+    metadata: { labels: { app: overprovisioning } }
+    spec:
+      priorityClassName: overprovisioning
+      containers:
+        - name: pause
+          image: registry.k8s.io/pause:3.9
+          resources:
+            requests: { cpu: 300m, memory: 300Mi }   # node'da yer "rezerve eder"
+```
+
+**Cloud'da (AWS örneği):** Cluster Autoscaler EC2 Auto Scaling Group'u yönetir. Peak öncesi
+scheduled action ile ASG `desired` artırılır → node'lar warm bekler → pod gelince anında yerleşir.
+Bare-metal'de fiziksel node hazır tutulur ve peak öncesi `kubeadm join` ile cluster'a alınır.
+
+> 💡 Yazılı yanıtı `docs/design-answers/step3-autoscaling.md` altına genişlet.
+
+📖 KEDA Cron: https://keda.sh/docs/latest/scalers/cron/
+📖 Cluster Autoscaler: https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler
+
+---
+
+### Step 3.3: Kritik Uygulama Deployment Stratejisi
+
+#### Case Study Ne İstiyor?
+
+> *"Critical application, new version could impact users.*
+> *a. What deployment strategy would you use to minimize risk? Explain how it mitigates issues.*
+> *b. Describe how you would implement a traffic shift from old to new version."*
+
+#### Çözüm: Canary Deployment (ingress-nginx canary-weight)
+
+Canary: yeni versiyona önce **%10 trafik** → metrikleri izle → sorun yoksa kademeli artır →
+%100. Risk minimize, çünkü hata sadece kullanıcıların küçük kısmını etkiler; anında geri alınır.
 
 `step3-manifests/canary-deployment.yaml`:
 ```yaml
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: query-param-app-canary
-  namespace: app
+metadata: { name: query-param-app-canary, namespace: app }
 spec:
   replicas: 2
-  selector:
-    matchLabels:
-      app: query-param-app-canary
+  selector: { matchLabels: { app: query-param-app-canary } }
   template:
-    metadata:
-      labels:
-        app: query-param-app-canary
+    metadata: { labels: { app: query-param-app-canary } }
     spec:
       containers:
         - name: query-param-app
-          image: dreamgames/query-param-app:2.0.0   # YENİ VERSİYON
+          image: dreamgames/query-param-app:2.0.0       # YENİ versiyon
           resources:
-            requests:
-              cpu: 250m
-              memory: 256Mi
+            requests: { cpu: 100m, memory: 128Mi }
 ---
 apiVersion: v1
 kind: Service
-metadata:
-  name: query-param-app-canary
-  namespace: app
+metadata: { name: query-param-app-canary, namespace: app }
 spec:
-  selector:
-    app: query-param-app-canary
-  ports:
-    - port: 80
-      targetPort: 8080
+  selector: { app: query-param-app-canary }
+  ports: [{ port: 80, targetPort: 8080 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -2623,7 +2524,7 @@ metadata:
   namespace: app
   annotations:
     nginx.ingress.kubernetes.io/canary: "true"
-    nginx.ingress.kubernetes.io/canary-weight: "10"   # %10 trafik yeni versiyona
+    nginx.ingress.kubernetes.io/canary-weight: "10"     # %10 trafik
 spec:
   ingressClassName: nginx
   rules:
@@ -2632,278 +2533,319 @@ spec:
         paths:
           - path: /
             pathType: Prefix
-            backend:
-              service:
-                name: query-param-app-canary
-                port:
-                  number: 80
+            backend: { service: { name: query-param-app-canary, port: { number: 80 } } }
 ```
 
 ```bash
 kubectl apply -f step3-manifests/canary-deployment.yaml
-
-# Grafana'da hata rate'ini izle...
-# Sorun yoksa %50'ye çıkar:
-kubectl annotate ingress query-param-app-canary \
-  nginx.ingress.kubernetes.io/canary-weight=50 -n app --overwrite
-
-# Tam geçiş (%100):
-kubectl annotate ingress query-param-app-canary \
-  nginx.ingress.kubernetes.io/canary-weight=100 -n app --overwrite
-
-# Rollback (canary ingress'i sil → %100 eski versiyona döner):
-# kubectl delete ingress query-param-app-canary -n app
+# Grafana'da canary hata oranı/latency izle → sorun yoksa kademeli artır:
+kubectl annotate ingress query-param-app-canary -n app --overwrite nginx.ingress.kubernetes.io/canary-weight=50
+kubectl annotate ingress query-param-app-canary -n app --overwrite nginx.ingress.kubernetes.io/canary-weight=100
+# Rollback: canary ingress'i sil → %100 eski versiyon
+kubectl delete ingress query-param-app-canary -n app
 ```
+
+> 💡 Alternatifler: Blue-Green (anlık geçiş, hızlı rollback) ve Argo Rollouts (otomatik
+> analiz + progressive delivery). Yazılı yanıt: `docs/design-answers/step3-deployment-strategy.md`.
+
+📖 Canary (ingress-nginx): https://kubernetes.github.io/ingress-nginx/examples/canary/
 
 ---
 
-## Bölüm 11 — Tasarım Soruları (Step 4)
+### Step 3.4: Replica Veritabanı Ölçekleme
 
-Bu bölüm yazılı tasarım soruları. Kod değil, düşünce sürecin değerlendiriliyor.
-Her cevabı `docs/design-answers/` altına ekle.
+#### Case Study Ne İstiyor?
+
+> *"Higher traffic increases load on replica databases. Users should not experience high response times.*
+> *a. How would you ensure the replica instances scale out and in before and after peak times?*
+> *b. How would you integrate newly created databases with the application?*
+> *c. Describe a method to pre-fill memory on the replica databases before traffic spikes.*
+> Note: Only write the code and explain your approach."*
+
+#### Yaklaşım + Kod
+
+**3.4a — Replica'ları peak öncesi ölçekle:** KEDA Cron ile read-replica StatefulSet'i (veya cloud'da
+RDS read replica sayısı) peak'ten önce artır, sonra düşür.
+
+`step3-manifests/db-replica-scaledobject.yaml`:
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata: { name: pg-read-replica-scaler, namespace: data }
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: StatefulSet
+    name: pg-read-replica
+  minReplicaCount: 2
+  maxReplicaCount: 6
+  triggers:
+    - type: cron
+      metadata:
+        timezone: Europe/Istanbul
+        start: "30 8 * * 1-5"        # peak öncesi 08:30 → 6 replica
+        end:   "0 11 * * 1-5"
+        desiredReplicas: "6"
+    - type: prometheus               # ayrıca read QPS yüksekse reaktif ölçekle
+      metadata:
+        serverAddress: http://kube-prometheus-stack-prometheus.monitoring:9090
+        query: sum(rate(pg_stat_database_xact_commit{datname="app"}[2m]))
+        threshold: "5000"
+```
+
+**3.4b — Yeni replica'yı uygulamaya bağla:** Uygulama tekil IP'lere değil, **read Service /
+connection pooler**'a bağlanır. Yeni replica `role=read` label'ıyla ayağa kalkınca Service
+endpoint'lerine otomatik girer; **PgBouncer/ProxySQL** read trafiğini dağıtır → uygulama kodu değişmez.
+
+`step3-manifests/db-read-service.yaml`:
+```yaml
+apiVersion: v1
+kind: Service
+metadata: { name: pg-read, namespace: data }
+spec:
+  selector: { app: postgres, role: read }   # tüm read-replica'ları kapsar
+  ports: [{ port: 5432, targetPort: 5432 }]
+# Uygulama DB_READ_HOST=pg-read.data.svc.cluster.local kullanır → yeni replica otomatik dahil
+```
+
+**3.4c — Cache pre-warming (peak öncesi belleği doldur):** Yeni replica soğuk başlar (cache boş) →
+ilk sorgular yavaş. Peak'ten önce sık kullanılan sorguları çalıştırıp page cache + buffer pool'u
+ısıt. PostgreSQL'de `pg_prewarm` extension'ı ideal.
+
+`step3-manifests/db-prewarm-cronjob.yaml`:
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: pg-prewarm, namespace: data }
+spec:
+  schedule: "20 8 * * 1-5"           # peak'ten 40 dk önce ısıt
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: prewarm
+              image: postgres:16-alpine
+              env:
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: pg-credentials, key: password } }
+              command: ["/bin/sh","-c"]
+              args:
+                - |
+                  psql -h pg-read.data.svc.cluster.local -U app -d app -c \
+                    "CREATE EXTENSION IF NOT EXISTS pg_prewarm;
+                     SELECT pg_prewarm('hot_table_1');
+                     SELECT pg_prewarm('hot_index_1');"
+                  # Alternatif: sık sorguları çalıştırıp buffer pool'u doldur
+                  psql -h pg-read.data.svc.cluster.local -U app -d app -c \
+                    "SELECT count(*) FROM leaderboard WHERE season='current';"
+```
+
+> 💡 Detaylı yazılı yanıt: `docs/design-answers/step3-database-scaling.md`.
+
+📖 pg_prewarm: https://www.postgresql.org/docs/current/pgprewarm.html
+📖 KEDA Prometheus scaler: https://keda.sh/docs/latest/scalers/prometheus/
+
+---
+
+## Step 4: Tasarım Soruları
+
+> Bu bölüm yazılı tasarım soruları — kod değil, düşünce süreci değerlendirilir. Her yanıtı
+> `docs/design-answers/` altına ekle.
 
 ### Step 4.1: macOS → Cloud CI/CD Migrasyonu
 
-`docs/design-answers/step4-cloud-cicd.md` dosyasına şunları yaz:
+#### Case Study Ne İstiyor?
 
-**Sorun:** On-premises macOS build makineleri → kuyruk tıkanıklığı.
+> *"On-premises macOS build machines for Unity iOS/Android builds via Jenkins; too many jobs queued.*
+> *a. Plan to move CI/CD to the cloud.*
+> *b. How to handle building artifacts; developers should easily install/test releases.*
+> *c. Licensing challenges and solutions."*
 
-**Çözüm Planı:**
+`docs/design-answers/step4-cloud-cicd.md`:
 ```
-1. AWS EC2 Mac instances (mac1.metal veya mac2.metal)
-   - Apple Silicon native (M1 chip) → Unity iOS/Android build'ler
-   - Dedicated host (Apple lisans zorunluluğu: 24 saat minimum kiralama)
-   
-2. GitHub Actions Runner Controller (ARC) veya Jenkins Kubernetes Agent
-   - Her build için ephemeral runner/agent başlat → build biter bitmez sil
-   - Kuyruk problemi ortadan kalkar: sınırsız paralel build
-   
-3. Artifact dağıtımı:
-   - iOS IPA → TestFlight (Apple) veya AppCenter (Microsoft, ücretsiz)
-   - Android APK → Google Play Internal Testing veya Firebase App Distribution
-   - Geliştiriciler link alır, hemen cihazlarına kurar
-   
-4. Lisans zorunlulukları:
-   - Apple: Xcode sadece macOS'ta çalışır → EC2 Mac instance zorunlu
-   - Unity: per-seat lisans → floating license server veya per-build lisans
-   - Code signing: Apple Developer Certificate → AWS Secrets Manager'da sakla
-   - fastlane match: sertifikaları Git'te şifreli sakla (veya S3)
+a. Cloud'a taşıma planı:
+   - AWS EC2 Mac instances (mac2.metal, Apple Silicon) → Unity iOS/Android build
+     - Dedicated host (Apple lisans kuralı: min 24 saat kiralama)
+   - Jenkins Kubernetes agent veya GitHub Actions Runner Controller (ARC):
+     - Her build için ephemeral runner → biter bitmez silinir → kuyruk tıkanmaz, sınırsız paralel
+   - Build cache: S3/EFS üzerinde paylaşımlı Unity Library cache → tekrar derleme hızlanır
+
+b. Artifact dağıtımı:
+   - iOS IPA → TestFlight; Android APK/AAB → Firebase App Distribution / Play Internal Testing
+   - Geliştirici link/QR alır, cihazına anında kurar
+   - Versiyonlama: immutable build numarası + git SHA
+
+c. Lisans zorlukları:
+   - Xcode sadece macOS → EC2 Mac zorunlu (dedicated host maliyeti yönetilir: peak'te aç, sonra kapat)
+   - Unity: floating license server veya per-build lisans
+   - Apple code signing sertifikaları → AWS Secrets Manager + fastlane match (şifreli repo/S3)
 ```
 
 ### Step 4.2: iOS Build Otomasyonu
 
-`docs/design-answers/step4-ios-automation.md` dosyasına şunları yaz:
+#### Case Study Ne İstiyor?
 
-**Çözüm: fastlane**
+> *"iOS builds involve repetitive steps (code signing, building, testing, archiving, App Store
+> submission). Describe the ideal way to automate the iOS app development lifecycle."*
+
+`docs/design-answers/step4-ios-automation.md`:
 ```
-fastlane action akışı:
-1. match (kod imzalama):
-   - Sertifikaları merkezi depoda (S3 veya Git) şifreli sakla
-   - CI'da: MATCH_PASSWORD env var → sertifika otomatik çekilir
-   
-2. gym (build):
-   - Xcode project derle, IPA oluştur
-   - `gym(scheme: "MyApp", configuration: "Release")`
-   
-3. scan (test):
-   - Unit ve UI testleri çalıştır, başarısız olursa pipeline dur
-   
-4. pilot (TestFlight dağıtımı):
-   - IPA'yı TestFlight'a yükle
-   - Test gruplarına otomatik dağıt
-   
-5. deliver (App Store gönderimi):
-   - Screenshot, açıklama, metadata dahil tam App Store submission
+Çözüm: fastlane
+  1. match    → code signing sertifika/profilleri şifreli merkezi depodan çek (CI'da MATCH_PASSWORD)
+  2. gym      → Xcode build + IPA archive (gym(scheme:"MyApp", configuration:"Release"))
+  3. scan     → unit/UI testleri; başarısızsa pipeline durur
+  4. pilot    → TestFlight'a yükle + test gruplarına dağıt
+  5. deliver  → App Store submission (metadata, screenshot dahil)
 
-Jenkinsfile veya GitHub Actions:
-- Her PR → scan (test)
-- Main branch → gym + pilot (TestFlight)
-- Tag v*.*.* → deliver (App Store)
+Pipeline tetikleyici:
+  - Her PR        → scan (test)
+  - main branch   → gym + pilot (TestFlight)
+  - tag v*.*.*    → deliver (App Store)
+Faydası: manuel, hataya açık adımlar tek komuta iner; tekrarlanabilir, denetlenebilir.
 ```
 
 ### Step 4.3: AWS Kubernetes Disaster Recovery
 
-`docs/design-answers/step4-aws-dr.md` dosyasına şunları yaz:
+#### Case Study Ne İstiyor?
 
-**RTO/RPO Hedefleri:**
-```
-RTO (Recovery Time Objective): < 1 saat
-RPO (Recovery Point Objective): < 15 dakika
-```
+> *"Disaster recovery plan for a Kubernetes cluster on AWS.*
+> *a. Steps to ensure the cluster can recover from a failure.*
+> *b. Consider data persistence, backup/restoration, and configuration management."*
 
-**Katman 1: Cluster Konfigürasyonu**
+`docs/design-answers/step4-aws-dr.md`:
 ```
-- Tüm manifest'ler Git'te (GitOps) → yeni cluster'a `kubectl apply -f` ile restore
-- ArgoCD/Flux → cluster state'i Git'ten otomatik reconcile eder
-- Terraform → EKS cluster altyapısını yeniden oluşturur (IaC)
-```
+Hedefler: RTO < 1 saat, RPO < 15 dk
 
-**Katman 2: Veri**
-```
-- Velero: K8s resource backup + PVC snapshot → S3
-  - Schedule: her 15 dakikada bir (RPO: 15 dk)
-  - S3 Cross-Region Replication (CRR): disaster bölgesine otomatik kopyala
-  
-- RDS: Multi-AZ deployment → otomatik failover
-  - Cross-region read replica → disaster'da promote et
-  
-- ElastiCache: backup + cross-region replica
-```
+Katman 1 — Konfigürasyon (config management):
+  - Tüm manifest'ler Git'te (GitOps) → ArgoCD/Flux yeni cluster'ı Git'ten reconcile eder
+  - Terraform → EKS altyapısını IaC ile yeniden oluşturur
 
-**Katman 3: DNS Failover**
-```
-- Route53 Health Check → primary cluster sağlıklı mı?
-- Failover routing policy:
-  - Primary: us-east-1 EKS cluster
-  - Secondary: eu-west-1 EKS cluster (warm standby)
-  - Health check başarısız → DNS otomatik secondary'e yönlendirir
+Katman 2 — Veri (persistence + backup):
+  - Velero: K8s resource + PVC snapshot → S3, her 15 dk (RPO 15 dk), S3 CRR ile cross-region
+  - RDS: Multi-AZ + cross-region read replica → disaster'da promote
+  - ElastiCache: backup + cross-region replica
+
+Katman 3 — DNS failover:
+  - Route53 health check + failover policy: primary us-east-1, secondary eu-west-1 (warm standby)
+
+Katman 4 — Recovery prosedürü:
+  1. Terraform apply → yeni EKS (15-20 dk)
+  2. ArgoCD/Flux → manifest deploy (10 dk)
+  3. Velero restore → PVC'ler S3'ten (5-10 dk)
+  4. RDS replica promote (2-5 dk)
+  5. Route53 güncelle (60-300 sn)
+  Toplam RTO ~30-45 dk ✓
 ```
 
-**Katman 4: Recovery Prosedürü**
-```
-1. Terraform apply → yeni EKS cluster (15-20 dk)
-2. ArgoCD/Flux → manifest'leri Git'ten deploy (10 dk)
-3. Velero restore → PVC'leri S3'ten restore et (5-10 dk)
-4. RDS replica promote → veritabanı failover (2-5 dk)
-5. Route53 → DNS güncelle (propagation: 60-300 sn)
-Toplam RTO: ~30-45 dk ✓
-```
+📖 fastlane: https://fastlane.tools/
+📖 Velero: https://velero.io/docs/
 
 ---
 
-## Bölüm 12 — Doğrulama ve Temizlik
+## Doğrulama ve Temizlik
 
-### Adım 35: Tam Sistem Doğrulaması
+### Tam Sistem Doğrulaması
 
 ```bash
-# Node'lar
-kubectl get nodes -o wide
-# 3 node Ready: master, worker1, worker2
+# Cluster
+kubectl get nodes -o wide                      # 3 node Ready
+kubectl get pods -n app -o wide                # 4 pod, worker1+worker2 dağılımı
 
-# Pod dağılımı (worker1 + worker2'de mi?)
-kubectl get pods -n app -o wide
+# Uygulama
+curl 'http://app.example.com/api/echo?hello=world&foo=bar'
 
-# HPA
+# HPA / PDB
 kubectl describe hpa query-param-app -n app
-
-# PDB
 kubectl get pdb -n app
 
-# Uygulama smoke test
-curl 'http://app.example.com/api/echo?hello=world&foo=bar'
-# Beklenen: {"foo":"bar","hello":"world"}
+# Jenkins Node 3 (faz çalışıyorsa)
+kubectl get pod -n jenkins -o wide             # NODE = worker2
 
-# Webhook testi (resource request eksik → reddedilmeli)
-kubectl apply -n app -f - << 'EOF' 2>&1 | grep -i "denied\|webhook\|rejected"
+# Monitoring (faz çalışıyorsa)
+curl -s 'http://monitoring.example.com/prometheus/-/healthy'
+
+# Webhook (resource request eksik → reddedilmeli)
+kubectl apply -n app -f - << 'EOF' 2>&1 | grep -i "denied\|webhook"
 apiVersion: apps/v1
 kind: Deployment
-metadata:
-  name: webhook-test
+metadata: { name: webhook-test }
 spec:
   replicas: 1
-  selector:
-    matchLabels: { app: test }
+  selector: { matchLabels: { app: t } }
   template:
-    metadata:
-      labels: { app: test }
-    spec:
-      containers:
-        - name: nginx
-          image: nginx
+    metadata: { labels: { app: t } }
+    spec: { containers: [{ name: nginx, image: nginx }] }
 EOF
-# Beklenen: admission webhook denied the request
-
-# Monitoring erişim
-curl -s 'http://monitoring.example.com/prometheus/-/healthy'
-# Beklenen: Prometheus is Healthy.
-
-# Grafana şifresi
-kubectl get secret grafana-admin-secret -n monitoring \
-  -o jsonpath='{.data.admin-password}' | base64 -d
-
-# Jenkins şifresi
-kubectl get secret jenkins-credentials -n jenkins \
-  -o jsonpath='{.data.admin-password}' | base64 -d
-
-# Jenkins Node 3 (worker2) üzerinde mi?
-kubectl get pod -n jenkins -o wide | grep jenkins
-# NODE sütununda worker2 yazmalı
-
-# KEDA ScaledObject
-kubectl get scaledobject -n app
-
-# ElasticSearch sağlık durumu
-kubectl get elasticsearch -n monitoring
 ```
 
-### Adım 36: Temizlik
+### Temizlik
 
 ```bash
-# OrbStack VM'leri sil
-orb delete master
-orb delete worker1
-orb delete worker2
+# Faz bazlı (RAM boşalt)
+helm uninstall jenkins -n jenkins
+helm uninstall kube-prometheus-stack -n monitoring
+helm uninstall fluent-bit -n monitoring
+kubectl delete elasticsearch elasticsearch -n monitoring
 
-# kubeconfig temizle
-unset KUBECONFIG
-rm ~/.kube/config-dreamgames
-
-# /etc/hosts temizle (macOS)
-sudo sed -i '' '/example.com/d' /etc/hosts
+# Tüm ortamı sil
+multipass delete master worker1 worker2 && multipass purge
+unset KUBECONFIG && rm -f ~/.kube/config-dreamgames
+sudo sed -i '' '/example.com/d' /etc/hosts        # macOS
 ```
 
 ---
 
-## Özet: Case Study Kapsama
+## Kapsam Özeti
 
-| Step | Gereksinim | Karşılandı mı? |
-|------|-----------|---------------|
-| 1.1 | Java app query params | ✅ Spring Boot /api/echo |
-| 1.2 | Multi-stage Dockerfile | ✅ 3 stage, JRE Alpine |
+| Madde | Gereksinim | Durum |
+|-------|-----------|-------|
+| 1.1 | Java app, query params console'a | ✅ Spring Boot /api/echo |
+| 1.2 | Multi-stage Dockerfile | ✅ 3 stage |
 | 1.2a | Build acceleration | ✅ Layer caching (pom.xml önce) |
 | 1.2b | Compact image | ✅ JRE-only Alpine |
-| 1.2c | Security Dockerfile | ✅ non-root, readOnly |
-| 1.3 | kubeadm cluster | ✅ Ansible + kubeadm (OrbStack VMs) |
+| 1.2c | Security best practices | ✅ non-root, minimal base, Trivy |
+| 1.3 | kubeadm cluster | ✅ Ansible + kubeadm (Multipass VM) |
 | 1.3a | K8s 1.28+ | ✅ 1.32 |
 | 1.3b | Custom subnets | ✅ 10.244.0.0/16, 10.96.0.0/12 |
-| 1.3c | GitOps | ✅ Manifests Git'te (belgelenmiş) |
-| 1.4 | ExternalDNS | ✅ CoreDNS provider |
-| 1.5 | Jenkins | ✅ |
-| 1.5a | Jenkins Node 3 | ✅ nodeSelector: worker2 |
+| 1.3c | GitOps | ✅ Manifest'ler Git'te (ArgoCD ekle = tam) |
+| 1.4 | ExternalDNS | ✅ CoreDNS provider + RBAC + Deployment |
+| 1.4b | Otomatik DNS / manifest | ✅ --source=service |
+| 1.5a | Jenkins Node 3 | ✅ nodeSelector: worker2 + PV nodeAffinity |
 | 1.5b | JCasC | ✅ |
-| 1.5c | Config persistence | ✅ PVC |
-| 1.5d | LoadBalancer hostname | ✅ |
-| 1.6 | Prometheus+ES+Grafana+fluentbit | ✅ |
-| 1.6a | K8s + app dashboards | ✅ 2 dashboard (k8s-overview + RED) |
-| 1.6b | Pod restart alert | ✅ PodCrashLooping |
-| 1.6c | Single hostname paths | ✅ /prometheus /grafana /elasticsearch |
+| 1.5c | Config persistence | ✅ PV Retain + PVC |
+| 1.5d | LoadBalancer hostname | ✅ MetalLB + Ingress |
+| 1.6 | Prometheus+ES+Grafana+fluentbit+AlertManager | ✅ |
+| 1.6a | K8s + app dashboard | ✅ 2 dashboard |
+| 1.6b | Pod restart alert | ✅ PodRestarted/PodCrashLooping |
+| 1.6c | Single hostname paths | ✅ /grafana /prometheus /elasticsearch |
 | 1.6d | Logs → Elasticsearch | ✅ Fluent Bit |
 | 1.7a | Async file logging | ✅ AsyncAppender |
 | 1.7b | Max 1GB | ✅ SizeAndTimeBasedRollingPolicy |
 | 1.7c | Daily rotation | ✅ |
-| 2.1 | 4 pods, both workers | ✅ |
+| 2.1 | 4 pod, both workers, Nginx LB | ✅ |
 | 2.1a | Even distribution | ✅ topologySpreadConstraints |
-| 2.1b | Readiness/liveness | ✅ |
-| 2.2 | Build pipeline | ✅ Trivy scan, immutable tag |
-| 2.3 | Deploy pipeline | ✅ |
-| 2.3a | **Ansible** apply manifests | ✅ Jenkinsfile.deploy |
+| 2.1b | Ready'de trafik + auto-restart | ✅ startup/readiness/liveness |
+| 2.2 | Build pipeline | ✅ Trivy + immutable tag |
+| 2.2a | Image → registry | ✅ DockerHub push |
+| 2.3a | **Ansible** apply manifests | ✅ Jenkinsfile.deploy + deploy-app.yml |
 | 2.3b | Ingress hostname | ✅ |
-| 2.3c | Zero-downtime | ✅ maxUnavailable:0 |
-| 2.4 | Validation webhook | ✅ |
-| 2.4a | **ConfigMap** for namespaces | ✅ volume mount |
-| 2.4b | Prometheus metrics | ✅ /metrics |
-| 3.1 | PriorityClass App X vs Y | ✅ |
-| 3.2 | KEDA scheduled scale | ✅ CronTrigger |
-| 3.3 | Canary deployment | ✅ ingress-nginx canary-weight |
-| 3.4 | DB replica scaling | ✅ design-answers/step3-database-scaling.md |
-| 4.1 | Cloud CI/CD plan | ✅ design-answers/step4-cloud-cicd.md |
-| 4.2 | iOS automation | ✅ design-answers/step4-ios-automation.md |
-| 4.3 | K8s DR on AWS | ✅ design-answers/step4-aws-dr.md |
+| 2.3c | Zero-downtime | ✅ maxUnavailable:0 + probes |
+| 2.4 | Validation webhook | ✅ Go, resource request kontrol |
+| 2.4a | **ConfigMap** namespaces | ✅ volume mount |
+| 2.4b | Prometheus metrics | ✅ :8080 /metrics |
+| 3.1 | App X/Y kaynak yönetimi | ✅ PriorityClass + QoS + manifest |
+| 3.2a | Zamanlı scale-out/in | ✅ KEDA Cron |
+| 3.2b | Peak öncesi node artırma | ✅ Cluster Autoscaler + overprovisioning |
+| 3.3 | Risk azaltan deployment | ✅ Canary (+ blue-green/argo notu) |
+| 3.4 | DB replica scaling | ✅ KEDA + read Service + pg_prewarm |
+| 4.1 | Cloud CI/CD plan | ✅ design-answers |
+| 4.2 | iOS automation | ✅ fastlane |
+| 4.3 | AWS K8s DR | ✅ Velero+Route53+Terraform |
 
-**Tahmini kapsama: ~92%**
-
-Kalan %8: GitOps tam implementasyon (ArgoCD/Flux eksik, "highly desirable" ama zorunlu değil),
-node auto-scaling (concrete K8s operator implementasyonu eksik, design doc var).
+**Tahmini kapsama: ~95%.** Kalan: tam GitOps (ArgoCD/Flux live), gerçek cloud node autoscaler
+(bare-metal'de simüle edildi) — ikisi de "highly desirable", zorunlu değil.
 
 ---
 
@@ -2911,7 +2853,7 @@ node auto-scaling (concrete K8s operator implementasyonu eksik, design doc var).
 
 | Araç | Dokümantasyon |
 |------|--------------|
-| OrbStack | https://docs.orbstack.dev/machines/ |
+| Multipass | https://multipass.run/docs |
 | kubeadm | https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/ |
 | Calico | https://docs.tigera.io/calico/latest/ |
 | MetalLB | https://metallb.universe.tf/ |
@@ -2920,13 +2862,13 @@ node auto-scaling (concrete K8s operator implementasyonu eksik, design doc var).
 | Jenkins Helm | https://www.jenkins.io/doc/book/installing/kubernetes/ |
 | JCasC | https://www.jenkins.io/projects/jcasc/ |
 | kube-prometheus-stack | https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack |
-| Prometheus Operator | https://prometheus-operator.dev/ |
 | ECK | https://www.elastic.co/guide/en/cloud-on-k8s/current/ |
 | Fluent Bit | https://docs.fluentbit.io/manual/ |
 | Trivy | https://aquasecurity.github.io/trivy/ |
 | KEDA | https://keda.sh/docs/latest/ |
+| Cluster Autoscaler | https://github.com/kubernetes/autoscaler/tree/master/cluster-autoscaler |
 | Admission Webhooks | https://kubernetes.io/docs/reference/access-authn-authz/extensible-admission-controllers/ |
-| PSA | https://kubernetes.io/docs/concepts/security/pod-security-admission/ |
 | PriorityClass | https://kubernetes.io/docs/concepts/scheduling-eviction/pod-priority-preemption/ |
+| pg_prewarm | https://www.postgresql.org/docs/current/pgprewarm.html |
 | fastlane | https://fastlane.tools/ |
 | Velero | https://velero.io/docs/ |
