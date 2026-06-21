@@ -21,16 +21,16 @@
     - name: Apply namespace
       command: kubectl apply -f {{ manifest_dir }}/namespace.yaml
       environment:
-        KUBECONFIG: /home/vagrant/.kube/config
+        KUBECONFIG: "/home/{{ node_user | default('ubuntu') }}/.kube/config"
 
     - name: Apply application manifests
       command: kubectl apply -f {{ manifest_dir }}/
       environment:
-        KUBECONFIG: /home/vagrant/.kube/config
+        KUBECONFIG: "/home/{{ node_user | default('ubuntu') }}/.kube/config"
 
     - name: Wait for rollout to complete
       command: >
         kubectl rollout status deployment/query-param-app
         -n {{ app_namespace }} --timeout=300s
       environment:
-        KUBECONFIG: /home/vagrant/.kube/config
+        KUBECONFIG: "/home/{{ node_user | default('ubuntu') }}/.kube/config"

@@ -1,12 +1,18 @@
 ---
+# Debian arch adı: aarch64 (M4/ARM) → arm64, x86_64 (Intel) → amd64
+- name: Detect dpkg architecture
+  command: dpkg --print-architecture
+  register: dpkg_arch
+  changed_when: false
+
 - name: Add Docker GPG key
   apt_key:
     url: https://download.docker.com/linux/ubuntu/gpg
     state: present
 
-- name: Add Docker repository
+- name: Add Docker repository (arch-aware — ARM64 ve AMD64 destekli)
   apt_repository:
-    repo: "deb [arch=amd64] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    repo: "deb [arch={{ dpkg_arch.stdout }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
     state: present
     filename: docker
 
@@ -39,8 +45,18 @@
     enabled: true
     state: started
 
-handlers:
-  - name: Restart containerd
-    systemd:
-      name: containerd
-      state: restarted
+# --- nerdctl-full: Docker Desktop'sız local image build için (master'da kullanılır) ---
+# Docker Desktop yerine imajlar burada, doğrudan cluster'ın containerd k8s.io namespace'inde build edilir.
+- name: Install nerdctl-full (nerdctl + buildkit + CNI)
+  unarchive:
+    src: "https://github.com/containerd/nerdctl/releases/download/v{{ nerdctl_version }}/nerdctl-full-{{ nerdctl_version }}-linux-{{ dpkg_arch.stdout }}.tar.gz"
+    dest: /usr/local
+    remote_src: true
+    creates: /usr/local/bin/nerdctl
+
+- name: Enable and start buildkit (nerdctl build için gerekli)
+  systemd:
+    name: buildkit
+    enabled: true
+    state: started
+    daemon_reload: true

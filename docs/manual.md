@@ -88,10 +88,15 @@ brew install kubectl helm ansible
 brew install --cask temurin@21    # OpenJDK 21
 brew install maven
 
-# İsteğe bağlı: Go (webhook için), k9s (terminal K8s UI), Docker (local image build)
+# İsteğe bağlı: Go (webhook için), k9s (terminal K8s UI)
 brew install go k9s
-brew install --cask docker        # Docker Desktop (image build/test için)
 ```
+
+> ⚠️ **16GB Mac'te Docker Desktop KURMA / ÇALIŞTIRMA.** Apple Silicon'da Docker Desktop kendi
+> Linux VM'ini çalıştırır ve arka planda **2-4GB RAM** tutar — bizim 2.9GB'lık Multipass cluster'ımızla
+> birlikte makineyi boğar. Bu rehberde Docker Desktop'a **hiç ihtiyaç yok**: container imajları ya
+> **master VM'inde containerd/nerdctl** ile ya da **cluster içinde Jenkins** ile build edilir. Eğer
+> kuruluysa kapat: `osascript -e 'quit app "Docker Desktop"'; pkill -9 -f com.docker`
 
 Versiyon kontrolü:
 ```bash
@@ -135,7 +140,13 @@ hepsini aynı anda ayakta tutmadan. Bu aynı zamanda DevOps olgunluğu gösterir
 
 ### VM'leri Oluştur (master 1.5GB + 2× worker 700MB)
 
-Önce ağır uygulamaları kapat (Chrome, Slack, IDE) → ~3-4GB boşalt.
+> ⚠️ **Host RAM'ini önce boşalt (16GB Mac için kritik).** En büyük gizli tüketici **Docker Desktop**:
+> Apple Silicon'da kendi Linux VM'ini çalıştırır ve 2-4GB tutar — bu rehberde **gerek yok**, kapat:
+> ```bash
+> osascript -e 'quit app "Docker Desktop"' 2>/dev/null; pkill -9 -f com.docker 2>/dev/null
+> ```
+> Ayrıca Chrome/Slack/IDE gibi ağır uygulamaları kapat → toplam ~4-6GB boşalır. Multipass VM'leri
+> (2.9GB) bundan sonra rahatça sığar. RAM'i ölçmek için: `vm_stat`.
 
 **SSH anahtarı hazırla** (Ansible bağlantısı için):
 ```bash
@@ -427,25 +438,51 @@ ENTRYPOINT ["java", \
 - **2c (security):** non-root user, minimal Alpine base (az CVE yüzeyi), sadece gerekli portlar.
   Step 2.2'de Trivy ile imaj taranır.
 
-#### Local Build ve Test
+#### Local Build ve Test (Docker Desktop'sız — RAM dostu)
 
+> ⚠️ **16GB Mac'te Docker Desktop kullanma.** Bunun yerine:
+> 1. JAR'ı local'de Maven ile build et + JAR'ı doğrudan `java -jar` ile test et (container yok),
+> 2. Container imajını **master VM'inin containerd'sinde nerdctl** ile build et — imaj doğrudan
+>    cluster'ın `k8s.io` namespace'ine girer, registry'ye push gerekmez (`imagePullPolicy: IfNotPresent`).
+
+**(a) JAR'ı local'de build et ve test et (Docker yok):**
 ```bash
 cd app
-mvn clean package -DskipTests
-docker build -t dreamgames/query-param-app:1.0.0 .
-docker run --rm -p 8080:8080 -p 9090:9090 dreamgames/query-param-app:1.0.0 &
+mvn clean package -DskipTests          # JAR üret (sadece Java+Maven, RAM ~300MB)
+
+# JAR'ı doğrudan çalıştır — container yok, Docker yok
+java -jar target/*.jar &
+APP_PID=$!
 
 curl 'http://localhost:8080/api/echo?hello=world&foo=bar'   # → {"hello":"world","foo":"bar"}
 curl 'http://localhost:9090/actuator/health'                # → {"status":"UP"}
 curl 'http://localhost:9090/actuator/prometheus' | grep echo
-
-# DockerHub'a push (case study: "DockerHub for Image Registry")
-docker login -u <DOCKERHUB_USER>
-docker push dreamgames/query-param-app:1.0.0
+kill $APP_PID                          # testi bitince kapat (RAM'i geri al)
 cd ..
 ```
 
+**(b) Container imajını master VM'inde build et (nerdctl, registry'siz):**
+```bash
+# Build context'i master VM'ine kopyala
+multipass transfer -r app master:/home/ubuntu/app
+
+# master'da nerdctl ile build → doğrudan k8s.io namespace'ine yaz
+multipass exec master -- sudo nerdctl --namespace k8s.io build \
+  -t dreamgames/query-param-app:1.0.0 /home/ubuntu/app
+
+# Doğrula — imaj cluster'da hazır
+multipass exec master -- sudo nerdctl --namespace k8s.io images | grep query-param-app
+```
+> nerdctl, kubeadm rolünde containerd ile birlikte kurulur (aşağıda Step 1.3). `k8s.io` namespace'ine
+> yazılan imaj, pod'lar tarafından çekme (pull) gerekmeden kullanılabilir.
+
+> **Alternatif — DockerHub'a push (case study "DockerHub for Image Registry" gereksinimi):** Bu, asıl
+> CI akışında **Jenkins build pipeline** (Step 2.2) tarafından cluster içinde yapılır — local Docker'a
+> gerek yok. Manuel push gerekirse master VM'inden: `multipass exec master -- sudo nerdctl --namespace
+> k8s.io push dreamgames/query-param-app:1.0.0` (önce `nerdctl login`).
+
 📖 Multi-stage builds: https://docs.docker.com/build/building/multi-stage/
+📖 nerdctl: https://github.com/containerd/nerdctl
 📖 eclipse-temurin: https://hub.docker.com/_/eclipse-temurin
 
 ---
@@ -1500,10 +1537,12 @@ ve her gün yeni dosyaya döner. Fluent Bit bu dosyayı (veya container log'unu)
 > ekleyip `/app/logs/application.log` dosyasını tail edin (emptyDir paylaşımlı volume). Böylece
 > hiç stdout yazılmaz, sadece async dosya logging kalır.
 
-Bu değişiklikten sonra imajı yeniden derle ve yeni tag ile push et (Step 2.2 pipeline bunu yapar):
+Bu değişiklikten sonra imajı yeniden derle (Step 2.2 pipeline bunu Jenkins'te yapar; local'de
+Docker Desktop'sız master VM'inde nerdctl ile):
 ```bash
-cd app && mvn clean package -DskipTests
-docker build -t dreamgames/query-param-app:1.1.0 . && docker push dreamgames/query-param-app:1.1.0 && cd ..
+cd app && mvn clean package -DskipTests && cd ..
+multipass transfer -r app master:/home/ubuntu/app
+multipass exec master -- sudo nerdctl --namespace k8s.io build -t dreamgames/query-param-app:1.1.0 /home/ubuntu/app
 ```
 
 📖 Logback AsyncAppender: https://logback.qos.ch/manual/appenders.html#AsyncAppender
@@ -2144,8 +2183,10 @@ ENTRYPOINT ["/webhook"]
 
 ```bash
 cd webhook && go mod init webhook 2>/dev/null; go mod tidy
-go vet ./... && go build ./...
-docker build -t dreamgames/resource-webhook:1.0.0 . && docker push dreamgames/resource-webhook:1.0.0 && cd ..
+go vet ./... && go build ./... && cd ..
+# Imajı master VM'inde build et (Docker Desktop yok) → doğrudan cluster containerd'sine
+multipass transfer -r webhook master:/home/ubuntu/webhook
+multipass exec master -- sudo nerdctl --namespace k8s.io build -t dreamgames/resource-webhook:1.0.0 /home/ubuntu/webhook
 ```
 
 #### Webhook ConfigMap (2.4a) + Deployment

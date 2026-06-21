@@ -1,7 +1,10 @@
 kubernetes_version: "1.32.0"
+kubernetes_apt_minor: "v1.32"   # apt repo path: pkgs.k8s.io/core:/stable:/v1.32/deb/
 pod_cidr: "10.244.0.0/16"
 service_cidr: "10.96.0.0/12"
 cluster_name: "dreamgames-cluster"
 api_server_address: "192.168.252.2"
+node_user: "ubuntu"   # Multipass VM kullanıcısı (Vagrant ise: vagrant)
 calico_version: "v3.29.1"
 containerd_version: "1.7.11"
+nerdctl_version: "2.0.3"
