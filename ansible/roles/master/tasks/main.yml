@@ -4,6 +4,8 @@
     path: /etc/kubernetes/admin.conf
   register: kubeadm_conf
 
+# --ignore-preflight-errors=Mem: master 1.5GB < kubeadm minimum (1700MB).
+# M4 Mac'in dar RAM bütçesi için bilinçli tercih; production'da master >= 2GB olmalı.
 - name: Initialize Kubernetes cluster
   command: >
     kubeadm init
@@ -12,24 +14,25 @@
     --service-cidr={{ service_cidr }}
     --kubernetes-version={{ kubernetes_version }}
     --node-name=master
+    --ignore-preflight-errors=Mem
   when: not kubeadm_conf.stat.exists
   register: kubeadm_init
 
-- name: Create .kube directory for vagrant user
+- name: Create .kube directory for node user
   file:
-    path: /home/vagrant/.kube
+    path: "/home/{{ node_user }}/.kube"
     state: directory
-    owner: vagrant
-    group: vagrant
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
     mode: '0755'
 
-- name: Copy admin.conf to vagrant user
+- name: Copy admin.conf to node user
   copy:
     src: /etc/kubernetes/admin.conf
-    dest: /home/vagrant/.kube/config
+    dest: "/home/{{ node_user }}/.kube/config"
     remote_src: true
-    owner: vagrant
-    group: vagrant
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
     mode: '0600'
 
 - name: Install Calico CNI
@@ -38,21 +41,22 @@
     kubectl apply -f
     https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
   environment:
-    KUBECONFIG: /home/vagrant/.kube/config
+    KUBECONFIG: "/home/{{ node_user }}/.kube/config"
 
 - name: Wait for master node to be Ready
   become: false
   command: kubectl wait node master --for=condition=Ready --timeout=300s
   environment:
-    KUBECONFIG: /home/vagrant/.kube/config
+    KUBECONFIG: "/home/{{ node_user }}/.kube/config"
 
 - name: Get join command
   command: kubeadm token create --print-join-command
   register: join_command
 
-- name: Save join command to file
+# Worker'lar da 700MB RAM ile düşük → join'de de Mem preflight'ı bypass et
+- name: Save join command to file (Mem bypass ile)
   copy:
-    content: "{{ join_command.stdout }}"
+    content: "{{ join_command.stdout }} --ignore-preflight-errors=Mem"
     dest: /tmp/kubeadm-join.sh
     mode: '0755'
 
