@@ -138,6 +138,19 @@ hepsini aynı anda ayakta tutmadan. Bu aynı zamanda DevOps olgunluğu gösterir
 > `kubectl scale deployment query-param-app --replicas=1 -n app`
 > Faz bitince geri büyüt: `kubectl scale deployment query-param-app --replicas=4 -n app`
 
+> ⚠️ **700MB worker'a ağır pod sığmaz — fazlık RAM büyütme şart.** Jenkins (~512Mi+),
+> Elasticsearch (~1Gi) gibi pod'lar 700MB worker'ın **allocatable** belleğine (sistem sonrası
+> ~400-500MB) sığmaz → `Pending` kalır. O faz boyunca ilgili worker'ı geçici büyüt, faz bitince
+> küçült (Mac RAM'ini geri alırsın):
+> ```bash
+> # Faz başında büyüt (worker drain GEREKMEZ, multipass restart yeter):
+> multipass stop worker2 && multipass set local.worker2.memory=2G && multipass start worker2
+> # ... fazı doğrula, screenshot al ...
+> # Faz sonunda küçült:
+> multipass stop worker2 && multipass set local.worker2.memory=700M && multipass start worker2
+> ```
+> Worker yeniden başlayınca kubelet otomatik cluster'a geri döner (`kubectl get nodes` → Ready).
+
 ### VM'leri Oluştur (master 1.5GB + 2× worker 700MB)
 
 > ⚠️ **Host RAM'ini önce boşalt (16GB Mac için kritik).** En büyük gizli tüketici **Docker Desktop**:
@@ -981,12 +994,18 @@ controller:
   metrics:
     enabled: true
     serviceMonitor:
-      enabled: true
+      # ⚠️ Faz 1'de FALSE olmalı: ServiceMonitor CRD'si kube-prometheus-stack (Faz 5) ile gelir.
+      # CRD yokken true yaparsan helm install "no matches for kind ServiceMonitor" ile çöker.
+      # Monitoring kurulduktan SONRA aşağıdaki helm upgrade ile true'ya çek.
+      enabled: false
   config:
     use-forwarded-headers: "true"
   resources:
     requests: { cpu: 100m, memory: 128Mi }
 ```
+
+> 💡 Monitoring (Faz 5) ayaktayken ingress metriklerini Prometheus'a bağlamak istersen:
+> `helm upgrade ingress-nginx ingress-nginx/ingress-nginx -n ingress-nginx -f kubernetes/ingress-nginx/values.yaml --set controller.metrics.serviceMonitor.enabled=true`
 
 ```bash
 helm repo add ingress-nginx https://kubernetes.github.io/ingress-nginx && helm repo update
@@ -1001,6 +1020,17 @@ echo "Ingress IP: $INGRESS_IP"
 # /etc/hosts'a ekle (case study: hostname erişimi)
 echo "$INGRESS_IP  app.example.com monitoring.example.com jenkins.example.com" | sudo tee -a /etc/hosts
 ```
+
+> ⚠️ **MetalLB IP'sine Mac'ten erişemezsen (Multipass NAT ağı):** Multipass'in macOS'taki ağı bazen
+> L2/ARP'yi host'a geçirmez → `curl http://app.example.com` takılır. İki çözüm:
+> 1. **Tünel (en garanti):** ingress controller'ı Mac'e port-forward et, `/etc/hosts`'u `127.0.0.1`'e yönlendir:
+>    ```bash
+>    echo "127.0.0.1  app.example.com monitoring.example.com jenkins.example.com" | sudo tee -a /etc/hosts
+>    sudo kubectl port-forward -n ingress-nginx svc/ingress-nginx-controller 80:80 443:443
+>    # Ayrı terminalde: curl http://app.example.com/api/echo?x=1
+>    ```
+> 2. **Doğrudan VM IP'si:** `/etc/hosts`'a INGRESS_IP yerine doğrudan bir **node IP'si** (örn. master)
+>    yaz ve ingress'i NodePort'tan aç — ama port-forward yöntemi daha temizdir.
 
 📖 kubeadm: https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/
 📖 Calico: https://docs.tigera.io/calico/latest/
@@ -1054,6 +1084,46 @@ subjects:
     namespace: kube-system
 ```
 
+ExternalDNS'in `coredns` provider'ı kayıtları bir **etcd**'ye yazar. Bu etcd'yi biz sağlamalıyız
+(yoksa ExternalDNS `etcd-dreamgames...:2379`'a bağlanamaz → CrashLoopBackOff). Minimal tek-node etcd:
+
+`kubernetes/externaldns/etcd.yaml`:
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-dreamgames
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels: { app: etcd-dreamgames }
+  template:
+    metadata:
+      labels: { app: etcd-dreamgames }
+    spec:
+      containers:
+        - name: etcd
+          image: quay.io/coreos/etcd:v3.5.12
+          command:
+            - etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://etcd-dreamgames.kube-system.svc.cluster.local:2379
+          ports:
+            - { containerPort: 2379 }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-dreamgames
+  namespace: kube-system
+spec:
+  selector: { app: etcd-dreamgames }
+  ports:
+    - { port: 2379, targetPort: 2379 }
+```
+
 `kubernetes/externaldns/deployment.yaml`:
 ```yaml
 apiVersion: apps/v1
@@ -1088,15 +1158,33 @@ spec:
 ```
 
 > **Local cluster için neden CoreDNS provider?** AWS/GCP'de Route53/Cloud DNS kullanılır.
-> Local'de CoreDNS (RFC2136/etcd backend) cluster-internal DNS kayıtlarını otomatik yönetir.
-> Cloud'a taşırken sadece `--provider` ve credential değişir; manifest yapısı aynı kalır.
+> Local'de ExternalDNS, DNS kayıtlarını **etcd**'ye yazar; CoreDNS bu etcd'yi `etcd` plugin'i ile
+> okuyup çözer. Cloud'a taşırken sadece `--provider` ve credential değişir; manifest yapısı aynı kalır.
 > `--source=service` sayesinde yeni Service oluşunca (1.4b) DNS kaydı otomatik açılır.
 
 ```bash
+kubectl apply -f kubernetes/externaldns/etcd.yaml
+kubectl rollout status deployment/etcd-dreamgames -n kube-system --timeout=60s
 kubectl apply -f kubernetes/externaldns/rbac.yaml
 kubectl apply -f kubernetes/externaldns/deployment.yaml
 kubectl logs -n kube-system deploy/external-dns | head   # "Created/Updated record" satırları
 ```
+
+> ⚠️ **CoreDNS'in bu kayıtları gerçekten çözmesi için** (opsiyonel — 1.4b'nin "kayıt oluşturma"
+> kısmı yukarıdaki adımla kanıtlanır; "çözme" için bu ek gerekir): cluster CoreDNS Corefile'ına
+> `example.com` için etcd plugin'i ekle. `kubectl -n kube-system edit configmap coredns` →
+> `.:53 { ... }` bloğunun üstüne:
+> ```
+> example.com:53 {
+>     errors
+>     cache 30
+>     etcd example.com {
+>         endpoint http://etcd-dreamgames.kube-system.svc.cluster.local:2379
+>     }
+> }
+> ```
+> Sonra `kubectl -n kube-system rollout restart deployment coredns`. Doğrulama: yeni bir
+> `LoadBalancer`/annotated Service oluştur → ExternalDNS log'unda "CREATE" gör → etcd'de kayıt oluşur.
 
 📖 ExternalDNS: https://github.com/kubernetes-sigs/external-dns
 📖 CoreDNS provider: https://github.com/kubernetes-sigs/external-dns/blob/master/docs/tutorials/coredns.md
@@ -1115,6 +1203,11 @@ kubectl logs -n kube-system deploy/external-dns | head   # "Created/Updated reco
 
 > ⚠️ **Faz 4 başlar.** Bu fazdan önce uygulamayı küçült:
 > `kubectl scale deployment query-param-app --replicas=1 -n app` (Step 2.1'i yaptıysan).
+>
+> ⚠️ **Jenkins 700MB worker2'ye sığmaz.** Pod `Pending` kalmasın diye worker2'yi bu faz için
+> geçici büyüt (bkz. [Kaynak Stratejisi](#kaynak-stratejisi-faz-faz-kurulum)):
+> `multipass stop worker2 && multipass set local.worker2.memory=2G && multipass start worker2`
+> Jenkins PV zaten worker2'ye pinli (Node 3), dolayısıyla pod orada açılır.
 
 #### Jenkins PV (Node 3 = worker2 pin) — 1.5a + 1.5c
 
@@ -1154,6 +1247,7 @@ kubectl create namespace jenkins
 # DockerHub token: https://hub.docker.com/settings/security
 # GitHub token:    https://github.com/settings/tokens
 kubectl create secret generic jenkins-credentials \
+  --from-literal=admin-user=admin \
   --from-literal=admin-password="$(openssl rand -base64 24)" \
   --from-literal=dockerhub-user=<DOCKERHUB_USER> \
   --from-literal=dockerhub-token=<DOCKERHUB_TOKEN> \
@@ -1161,6 +1255,8 @@ kubectl create secret generic jenkins-credentials \
   -n jenkins
 ```
 > ⚠️ Değerleri şifre yöneticisinden kopyala; sonra `history -c` ile terminal geçmişini temizle.
+> Admin şifresini sonra görmek için:
+> `kubectl get secret jenkins-credentials -n jenkins -o jsonpath='{.data.admin-password}' | base64 -d`
 
 #### Jenkins Helm Values — 1.5a/b/c/d hepsi
 
@@ -1210,9 +1306,11 @@ controller:
     - name: GITHUB_TOKEN
       valueFrom: { secretKeyRef: { name: jenkins-credentials, key: github-token } }
 
-  adminSecret: false
-  existingSecret: jenkins-credentials
-  existingSecretKey: admin-password
+  # Admin kullanıcısı secret'tan (modern chart yapısı: controller.admin.*)
+  admin:
+    existingSecret: jenkins-credentials
+    userKey: admin-user
+    passwordKey: admin-password
 
   installPlugins:
     - git:latest
@@ -1567,6 +1665,13 @@ echo "Grafana: http://monitoring.example.com/grafana  admin / $GRAFANA_PASS"
 
 #### 1.6d: Elasticsearch (ECK) + Fluent Bit (Logları ES'e Forward)
 
+> ⚠️ **ES, 700MB worker'a ASLA sığmaz** (1Gi request). Bu alt fazda mutlaka bir worker'ı geçici
+> büyüt, yoksa ES pod'u sonsuza dek `Pending` kalır:
+> ```bash
+> multipass stop worker1 && multipass set local.worker1.memory=2G && multipass start worker1
+> ```
+> ES doğrulanıp screenshot alındıktan sonra faz sonunda küçült (aşağıdaki temizlik notuna bak).
+
 ```bash
 # ECK Operator
 kubectl create -f https://download.elastic.co/downloads/eck/2.11.1/crds.yaml
@@ -1650,7 +1755,12 @@ curl -sk -u elastic:$ELASTIC_PASS http://monitoring.example.com/elasticsearch/_c
 ```
 
 > 💾 **Faz 6 sonu:** Logların ES'e aktığını doğrula/screenshot al, sonra RAM boşalt:
-> `helm uninstall fluent-bit -n monitoring && kubectl delete elasticsearch elasticsearch -n monitoring`
+> ```bash
+> helm uninstall fluent-bit -n monitoring
+> kubectl delete elasticsearch elasticsearch -n monitoring
+> # Büyüttüğün worker'ı geri küçült (Mac RAM'ini geri al):
+> multipass stop worker1 && multipass set local.worker1.memory=700M && multipass start worker1
+> ```
 
 📖 kube-prometheus-stack: https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack
 📖 ECK: https://www.elastic.co/guide/en/cloud-on-k8s/current/
@@ -2068,21 +2178,34 @@ Jenkins UI'da: **New Item → Pipeline → Pipeline script from SCM → Git → 
 
 #### Ansible Deploy Playbook
 
+> ⚠️ **Playbook nerede çalışır?** `hosts: localhost, connection: local` — yani Ansible'ın
+> çalıştığı yerde (Jenkins ansible container'ı **veya** senin Mac'in). Sebep: `kubernetes.core.k8s`
+> modülü `src:` manifest dosyalarını **çalıştığı host'un** diskinden okur. Repo orada (checkout/Mac),
+> master'da değil. Cluster'a erişim `KUBECONFIG` env değişkeniyle sağlanır.
+>
+> **Önkoşullar (çalıştığı host'ta bir kez):**
+> ```bash
+> ansible-galaxy collection install kubernetes.core
+> pip3 install kubernetes        # kubernetes.core.k8s modülünün Python bağımlılığı
+> ```
+
 `ansible/deploy-app.yml`:
 ```yaml
 ---
 - name: Deploy query-param-app to Kubernetes
-  hosts: master
-  become: false
+  hosts: localhost
+  connection: local
+  gather_facts: false
   vars:
     app_namespace: "{{ app_namespace | default('app') }}"
     docker_user:   "{{ docker_user | default('dreamgames') }}"
-    image_tag:     "{{ image_tag | default('latest') }}"
+    image_tag:     "{{ image_tag | default('1.1.0') }}"
   tasks:
-    - name: Manifest'leri uygula (Ansible k8s modülü)
+    - name: Manifest'leri uygula (Ansible k8s modülü — case study 2.3a)
       kubernetes.core.k8s:
         state: present
         src: "{{ item }}"
+        namespace: "{{ app_namespace }}"
       loop:
         - kubernetes/app/serviceaccount.yaml
         - kubernetes/app/service.yaml
@@ -2091,7 +2214,7 @@ Jenkins UI'da: **New Item → Pipeline → Pipeline script from SCM → Git → 
         - kubernetes/app/ingress.yaml
         - kubernetes/app/networkpolicy.yaml
 
-    - name: Deployment image'ını güncelle
+    - name: Deployment image'ını güncelle (rolling update tetikler)
       kubernetes.core.k8s:
         state: present
         definition:
@@ -2105,14 +2228,32 @@ Jenkins UI'da: **New Item → Pipeline → Pipeline script from SCM → Git → 
                   - name: query-param-app
                     image: "{{ docker_user }}/query-param-app:{{ image_tag }}"
 
-    - name: Rollout durumu kontrol
-      command: kubectl rollout status deployment/query-param-app -n {{ app_namespace }} --timeout=5m
+    - name: Rollout tamamlanana kadar bekle (zero-downtime doğrulama)
+      kubernetes.core.k8s_info:
+        kind: Deployment
+        name: query-param-app
+        namespace: "{{ app_namespace }}"
+        wait: true
+        wait_condition:
+          type: Available
+          status: "True"
+        wait_timeout: 300
       register: rollout_result
-      failed_when: rollout_result.rc != 0
 
     - name: Rollback (rollout başarısızsa)
       command: kubectl rollout undo deployment/query-param-app -n {{ app_namespace }}
-      when: rollout_result.rc != 0
+      when: rollout_result.failed | default(false)
+      environment:
+        KUBECONFIG: "{{ lookup('env', 'KUBECONFIG') }}"
+```
+
+> ℹ️ Rollout kontrolü için `kubectl` yerine `kubernetes.core.k8s_info` (wait_condition) kullandık →
+> playbook'un kubectl binary'sine bağımlılığı kalmaz, sadece Python kubernetes lib yeter.
+
+**Manuel test (Jenkins olmadan, Mac'ten):**
+```bash
+export KUBECONFIG=~/.kube/config-dreamgames
+ansible-playbook ansible/deploy-app.yml -e image_tag=1.1.0 -e app_namespace=app
 ```
 
 #### Deploy Jenkinsfile
@@ -2154,8 +2295,10 @@ spec:
         stage('Deploy via Ansible') {        // case study 2.3a
             steps { container('ansible') {
                 sh """
+                    # deploy-app.yml'in bağımlılıkları (k8s modülü + Python lib)
+                    ansible-galaxy collection install kubernetes.core
+                    pip3 install --quiet kubernetes || pip install --quiet kubernetes
                     ansible-playbook ansible/deploy-app.yml \
-                      -i ansible/inventory/hosts.ini \
                       -e image_tag=${params.IMAGE_TAG} \
                       -e app_namespace=${params.ENVIRONMENT} \
                       ${params.DRY_RUN ? '--check' : ''}
@@ -2444,6 +2587,10 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+      # ⚠️ webhook-system namespace'i PSA "restricted" → seccompProfile ZORUNLU.
+      # Yoksa pod admission'da reddedilir ("seccompProfile ... must be set").
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       volumes:
         - name: certs
           secret: { secretName: resource-webhook-tls }
@@ -2476,6 +2623,15 @@ webhooks:
     admissionReviewVersions: ["v1"]
     sideEffects: None
     failurePolicy: Fail
+    # ⚠️ Sistem namespace'lerini HARİÇ tut. failurePolicy:Fail iken webhook pod'u çökerse,
+    # selector olmadan TÜM namespace'lerde (kube-system dahil) deployment create/update BLOKE olur
+    # → cluster kilitlenir, webhook'un kendisi bile redeploy edilemez. Bu selector o riski keser.
+    # (Hangi namespace'in GERÇEKTEN denetleneceği yine ConfigMap'ten Go kodunda belirlenir — 2.4a.)
+    namespaceSelector:
+      matchExpressions:
+        - key: kubernetes.io/metadata.name
+          operator: NotIn
+          values: [kube-system, kube-node-lease, kube-public, webhook-system]
     clientConfig:
       service: { name: resource-webhook, namespace: webhook-system, path: /validate, port: 443 }
       caBundle: ""        # generate-certs.sh dolduracak
@@ -2514,18 +2670,30 @@ kubectl patch validatingwebhookconfiguration resource-requests-webhook --type='j
 echo "Done."
 ```
 
+> ⚠️ **Uygulama sırası kritiktir** (iki bağımlılık var):
+> - Deployment, `resource-webhook-tls` secret'ını mount eder → secret **deployment'tan önce** olmalı,
+>   yoksa pod'lar `ContainerCreating`'de takılır.
+> - `generate-certs.sh` hem secret'ı oluşturur **hem de** ValidatingWebhookConfiguration'ın
+>   caBundle'ını patch'ler → webhookconfiguration **script'ten önce** var olmalı.
+> Doğru sıra: configmap → webhookconfiguration → **certs (secret + caBundle)** → deployment → service.
+
 ```bash
 kubectl apply -f kubernetes/webhook/configmap.yaml
-kubectl apply -f kubernetes/webhook/deployment.yaml
+kubectl apply -f kubernetes/webhook/validatingwebhookconfiguration.yaml   # önce (caBundle boş)
+chmod +x kubernetes/webhook/tls/generate-certs.sh
+bash kubernetes/webhook/tls/generate-certs.sh    # secret'ı oluşturur + caBundle'ı patch'ler
+kubectl apply -f kubernetes/webhook/deployment.yaml   # secret artık hazır → pod ayağa kalkar
 kubectl apply -f kubernetes/webhook/service.yaml
-kubectl apply -f kubernetes/webhook/validatingwebhookconfiguration.yaml
-chmod +x kubernetes/webhook/tls/generate-certs.sh && bash kubernetes/webhook/tls/generate-certs.sh
+kubectl rollout status deployment/resource-webhook -n webhook-system --timeout=120s
 kubectl get pods -n webhook-system   # 2 pod Running
 ```
 
 **Test:**
+> ⚠️ `app` namespace'i PSA `restricted`. Test pod'unu PSA-uyumlu yapıyoruz (securityContext dolu)
+> ki **tek reddedilme sebebi resource request eksikliği** olsun — yoksa PSA reddeder ve webhook'u
+> test etmiş olmazsın.
 ```bash
-# Kötü deploy (resource request yok → reddedilmeli)
+# Kötü deploy: PSA-uyumlu AMA resource request YOK → SADECE webhook reddetmeli
 kubectl apply -n app -f - << 'EOF'
 apiVersion: apps/v1
 kind: Deployment
@@ -2536,10 +2704,19 @@ spec:
   template:
     metadata: { labels: { app: bad } }
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
       containers:
-        - { name: nginx, image: nginx }   # resources YOK
+        - name: app
+          image: nginx
+          securityContext:
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          # resources YOK → webhook reddeder (PSA değil)
 EOF
-# Beklenen: admission webhook ... denied the request
+# Beklenen: admission webhook "resource-requests.dreamgames.com" denied the request
 
 # 2.4a esnekliği: namespace ekle (kod değişmeden!)
 kubectl patch configmap webhook-config -n webhook-system --type=json \
@@ -2821,6 +2998,12 @@ kubectl delete ingress query-param-app-canary -n app
 
 #### Yaklaşım + Kod
 
+> ℹ️ **Bu manifest'ler illüstratiftir** (case study: *"Only write the code and explain your approach"*).
+> Gerçek bir PostgreSQL StatefulSet (`pg-read-replica`), `pg-credentials` secret'ı ve `data`
+> namespace'i varsaymaktadırlar — bu rehber gerçek bir DB kurmaz. Uygulamak istersen önce
+> `kubectl create namespace data` + bir postgres replica StatefulSet gerekir. Amaç **yaklaşımı ve
+> kodu** göstermek; faz faz kurulumda bunları apply etmene gerek yok.
+
 **3.4a — Replica'ları peak öncesi ölçekle:** KEDA Cron ile read-replica StatefulSet'i (veya cloud'da
 RDS read replica sayısı) peak'ten önce artır, sonra düşür.
 
@@ -3023,7 +3206,7 @@ kubectl get pod -n jenkins -o wide             # NODE = worker2
 # Monitoring (faz çalışıyorsa)
 curl -s 'http://monitoring.example.com/prometheus/-/healthy'
 
-# Webhook (resource request eksik → reddedilmeli)
+# Webhook (PSA-uyumlu ama resource request eksik → SADECE webhook reddetmeli)
 kubectl apply -n app -f - << 'EOF' 2>&1 | grep -i "denied\|webhook"
 apiVersion: apps/v1
 kind: Deployment
@@ -3033,7 +3216,15 @@ spec:
   selector: { matchLabels: { app: t } }
   template:
     metadata: { labels: { app: t } }
-    spec: { containers: [{ name: nginx, image: nginx }] }
+    spec:
+      securityContext: { runAsNonRoot: true, seccompProfile: { type: RuntimeDefault } }
+      containers:
+        - name: app
+          image: nginx
+          securityContext:
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
 EOF
 ```
 
