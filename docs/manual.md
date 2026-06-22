@@ -473,13 +473,41 @@ multipass exec master -- sudo nerdctl --namespace k8s.io build \
 # Doğrula — imaj cluster'da hazır
 multipass exec master -- sudo nerdctl --namespace k8s.io images | grep query-param-app
 ```
-> nerdctl, kubeadm rolünde containerd ile birlikte kurulur (aşağıda Step 1.3). `k8s.io` namespace'ine
-> yazılan imaj, pod'lar tarafından çekme (pull) gerekmeden kullanılabilir.
+> nerdctl, containerd rolünde kurulur (aşağıda Step 1.3). İmaj master'ın `k8s.io` namespace'ine yazılır.
 
-> **Alternatif — DockerHub'a push (case study "DockerHub for Image Registry" gereksinimi):** Bu, asıl
-> CI akışında **Jenkins build pipeline** (Step 2.2) tarafından cluster içinde yapılır — local Docker'a
-> gerek yok. Manuel push gerekirse master VM'inden: `multipass exec master -- sudo nerdctl --namespace
-> k8s.io push dreamgames/query-param-app:1.0.0` (önce `nerdctl login`).
+> ⚠️ **ÇOK ÖNEMLİ — imaj sadece master'da var, ama pod'lar worker'larda çalışıyor!** nerdctl imajı
+> yalnızca master'ın containerd'sine yazar. Uygulama pod'ları worker1/worker2'ye schedule edilir
+> (master control-plane, taint'li). O node'larda imaj olmadığı için `ImagePullBackOff` alırsın.
+> **İmajı mutlaka worker'lara da dağıtmalısın.** İki yol var (birini seç):
+
+**(c) Yol 1 — Registry'siz dağıtım (DockerHub gerekmez, en hızlı yerel test):**
+master'da imajı `save` et → her worker'a aktar → worker'larda `load` et. Tek seferlik fonksiyon
+(💡 bu fonksiyonu Step 1.7 ve 2.4'te tekrar kullanacaksın — yeni terminal açarsan tekrar yapıştır):
+```bash
+distribute_image() {
+  IMG="$1"   # örn: dreamgames/query-param-app:1.0.0
+  multipass exec master -- sudo nerdctl --namespace k8s.io save -o /tmp/img.tar "$IMG"
+  multipass transfer master:/tmp/img.tar /tmp/img.tar
+  for w in worker1 worker2; do
+    multipass transfer /tmp/img.tar $w:/tmp/img.tar
+    multipass exec $w -- sudo ctr --namespace k8s.io images import /tmp/img.tar
+  done
+  echo "✓ $IMG master + worker1 + worker2'ye yüklendi"
+}
+distribute_image dreamgames/query-param-app:1.0.0
+```
+> `ctr` containerd ile birlikte gelir (worker'larda nerdctl kurmaya gerek yok). `imagePullPolicy`
+> tag `:latest` olmadığı için `IfNotPresent` → node'da imaj varsa pull denemez.
+
+**(c) Yol 2 — DockerHub'a push (case study "DockerHub for Image Registry" gereksinimini birebir karşılar):**
+Asıl CI akışında bunu **Jenkins build pipeline** (Step 2.2) yapar. Manuel push:
+```bash
+multipass exec master -- sudo nerdctl login -u <DOCKERHUB_USER>          # şifre/token sorar
+multipass exec master -- sudo nerdctl --namespace k8s.io push dreamgames/query-param-app:1.0.0
+# Bu yolda imajı public/erişilebilir yaparsan worker'lar otomatik pull eder; dağıtıma gerek kalmaz.
+```
+> 💡 **Hangisini seç?** Sadece yerel demo/screenshot için **Yol 1** (registry'siz, hızlı). Case
+> study'nin DockerHub gereksinimini kanıtlamak için **Yol 2** (Jenkins pipeline zaten bunu yapar).
 
 📖 Multi-stage builds: https://docs.docker.com/build/building/multi-stage/
 📖 nerdctl: https://github.com/containerd/nerdctl
@@ -533,18 +561,31 @@ ansible_python_interpreter=/usr/bin/python3
 
 `ansible/group_vars/all.yml`:
 ```yaml
-kubernetes_version: "1.32.0"
+kubernetes_version: "1.32.0"          # apt paket tam sürümü (kubeadm/kubelet/kubectl)
+kubernetes_apt_minor: "v1.32"         # apt repo path: pkgs.k8s.io/core:/stable:/v1.32/deb/
+                                      # ⚠️ DİKKAT: repo path MINOR'dur (v1.32), v1.32.0 DEĞİL
 calico_version: "v3.29.1"
+containerd_version: "1.7.11"          # Docker repo'dan pinlenen sürüm
+nerdctl_version: "2.0.3"              # Docker Desktop'sız local image build için
 
 # Case study 1.3b: custom subnets (default'lardan farklı seçildi)
 pod_cidr: "10.244.0.0/16"      # Pod-to-pod ağı
 service_cidr: "10.96.0.0/12"   # ClusterIP Service IP havuzu
 
-api_server_address: "192.168.252.2"   # master VM IP'si
+api_server_address: "192.168.252.2"   # master VM IP'si — KENDİ master IP'ni yaz
+node_user: "ubuntu"                   # Multipass VM kullanıcısı (Vagrant olsaydı: vagrant)
 ```
+
+> ⚠️ **`kubernetes_version` vs `kubernetes_apt_minor` ayrımı kritik.** apt **paket** sürümü
+> `1.32.0-1.1` gibi tam sürümdür; apt **repo path**'i ise sadece minor'dur (`v1.32`). İkisini
+> karıştırırsan (`v1.32.0` repo path'i gibi) paket bulunamaz. Bu yüzden iki ayrı değişken var.
 
 **Neden custom subnet?** Case study özellikle istiyor. Default'u değiştirmek "cluster ağını
 anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları programlasın.
+
+**Neden `node_user`?** Multipass VM'lerinde login kullanıcısı `ubuntu`. kubeconfig'i bu kullanıcının
+home'una (`/home/ubuntu/.kube/config`) yazıyoruz ki Mac'ten `ssh ubuntu@master cat ~/.kube/config`
+ile çekebilelim. Vagrant kullansaydın `vagrant` olurdu — tek değişkenle taşınabilir.
 
 #### Ansible Rolleri
 
@@ -577,6 +618,7 @@ anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları pr
 ---
 - name: Swap kapat (kubeadm gereksinimi)
   command: swapoff -a
+  when: ansible_swaptotal_mb > 0
 
 - name: Swap kalıcı kapat
   replace:
@@ -587,6 +629,7 @@ anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları pr
 - name: Kernel modülleri (containerd için)
   modprobe:
     name: "{{ item }}"
+    state: present
   loop: [overlay, br_netfilter]
 
 - name: Modülleri kalıcı yap
@@ -600,71 +643,133 @@ anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları pr
   sysctl:
     name: "{{ item.key }}"
     value: "{{ item.value }}"
-    sysctl_set: true
     state: present
     reload: true
   loop:
     - { key: "net.bridge.bridge-nf-call-iptables",  value: "1" }
     - { key: "net.bridge.bridge-nf-call-ip6tables", value: "1" }
     - { key: "net.ipv4.ip_forward",                 value: "1" }
+
+# containerd Docker repo'su + nerdctl indirme için gerekli temel paketler
+- name: Ön gereksinim paketleri
+  apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - curl
+      - gnupg
+      - lsb-release
+      - socat
+      - conntrack
+    state: present
+    update_cache: true
 ```
 
 `ansible/roles/containerd/tasks/main.yml`:
+
+> ⚠️ **Bu rol M4 (ARM64) için kritik.** Ubuntu'nun kendi `containerd` paketi eski ve nerdctl
+> içermez. Docker'ın resmi repo'sundan **mimariye duyarlı** (`dpkg --print-architecture` → M4'te
+> `arm64`, Intel'de `amd64`) kurulum yapıyoruz. Ayrıca **nerdctl-full + buildkit** kuruyoruz —
+> Docker Desktop olmadan imaj build edebilmek için (Step 1.2b, 1.7, 2.4 buna bağlı).
+
 ```yaml
 ---
-- name: containerd kur
+# Debian arch adı: aarch64 (M4/ARM) → arm64, x86_64 (Intel) → amd64
+- name: Detect dpkg architecture
+  command: dpkg --print-architecture
+  register: dpkg_arch
+  changed_when: false
+
+- name: Add Docker GPG key
+  apt_key:
+    url: https://download.docker.com/linux/ubuntu/gpg
+    state: present
+
+- name: Add Docker repository (arch-aware — ARM64 ve AMD64 destekli)
+  apt_repository:
+    repo: "deb [arch={{ dpkg_arch.stdout }}] https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    state: present
+    filename: docker
+
+- name: Install containerd
   apt:
-    name: containerd
+    name: "containerd.io={{ containerd_version }}-1"
     state: present
     update_cache: true
 
-- name: Config dizini
+- name: Create containerd config directory
   file:
     path: /etc/containerd
     state: directory
 
-- name: Default config
+- name: Generate default containerd config
   shell: containerd config default > /etc/containerd/config.toml
+  args:
+    creates: /etc/containerd/config.toml
 
-- name: SystemdCgroup aktif (kubeadm gereksinimi)
+- name: Enable SystemdCgroup (kubeadm gereksinimi)
   replace:
     path: /etc/containerd/config.toml
     regexp: 'SystemdCgroup = false'
     replace: 'SystemdCgroup = true'
-  notify: restart containerd
+  notify: Restart containerd
 
-- name: containerd başlat
+- name: Enable and start containerd
   systemd:
     name: containerd
     enabled: true
     state: started
+
+# --- nerdctl-full: Docker Desktop'sız local image build (master'da kullanılır) ---
+# Docker Desktop yerine imajlar doğrudan cluster'ın containerd k8s.io namespace'inde build edilir.
+- name: Install nerdctl-full (nerdctl + buildkit + CNI)
+  unarchive:
+    src: "https://github.com/containerd/nerdctl/releases/download/v{{ nerdctl_version }}/nerdctl-full-{{ nerdctl_version }}-linux-{{ dpkg_arch.stdout }}.tar.gz"
+    dest: /usr/local
+    remote_src: true
+    creates: /usr/local/bin/nerdctl
+
+- name: Enable and start buildkit (nerdctl build için gerekli)
+  systemd:
+    name: buildkit
+    enabled: true
+    state: started
+    daemon_reload: true
 ```
 
 `ansible/roles/containerd/handlers/main.yml`:
 ```yaml
 ---
-- name: restart containerd
+- name: Restart containerd
   systemd:
     name: containerd
     state: restarted
 ```
 
 `ansible/roles/kubeadm/tasks/main.yml`:
+
+> ⚠️ Repo path **minor** sürümdür (`{{ kubernetes_apt_minor }}` = `v1.32`). Paket sürümü ise tam
+> sürüm (`{{ kubernetes_version }}-1.1` = `1.32.0-1.1`). Bu ayrımı bozarsan paket bulunamaz.
+
 ```yaml
 ---
 - name: Kubernetes apt key
   apt_key:
-    url: https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/Release.key
+    url: "https://pkgs.k8s.io/core:/stable:/{{ kubernetes_apt_minor }}/deb/Release.key"
     state: present
 
 - name: Kubernetes repo
   apt_repository:
-    repo: "deb https://pkgs.k8s.io/core:/stable:/v{{ kubernetes_version }}/deb/ /"
+    repo: "deb https://pkgs.k8s.io/core:/stable:/{{ kubernetes_apt_minor }}/deb/ /"
     state: present
+    filename: kubernetes
 
-- name: kubeadm/kubelet/kubectl kur
+- name: kubeadm/kubelet/kubectl kur (tam sürüm pinli)
   apt:
-    name: [kubeadm, kubelet, kubectl]
+    name:
+      - "kubeadm={{ kubernetes_version }}-1.1"
+      - "kubelet={{ kubernetes_version }}-1.1"
+      - "kubectl={{ kubernetes_version }}-1.1"
     state: present
     update_cache: true
 
@@ -673,90 +778,128 @@ anlıyorum" mesajı verir. Calico bu CIDR'ları bilmeli ki doğru route'ları pr
     name: "{{ item }}"
     selection: hold
   loop: [kubeadm, kubelet, kubectl]
+
+- name: kubelet'i etkinleştir ve başlat
+  systemd:
+    name: kubelet
+    enabled: true
+    state: started
 ```
 
 `ansible/roles/master/tasks/main.yml`:
+
+> ℹ️ **Neden template (kubeadm-config.yaml.j2) yerine CLI args?** Daha az hareketli parça →
+> daha az hata yüzeyi. Custom subnet'ler (`--pod-network-cidr`, `--service-cidr`) ve Mem bypass
+> doğrudan flag olarak veriliyor. kubeconfig **`node_user` home'una** (`/home/ubuntu/.kube/config`)
+> yazılıyor ki Mac'ten `ssh ubuntu@master cat ~/.kube/config` ile çekebilelim.
+
 ```yaml
 ---
-- name: kubeadm config oluştur
-  template:
-    src: kubeadm-config.yaml.j2
-    dest: /tmp/kubeadm-config.yaml
-
 - name: Cluster zaten init edilmiş mi?
   stat:
     path: /etc/kubernetes/admin.conf
-  register: kubeconfig_exists
+  register: kubeadm_conf
 
-# --ignore-preflight-errors=Mem: master 1.5GB < resmi min 1700MB → preflight bypass
-- name: kubeadm init
+# --ignore-preflight-errors=Mem: master 1.5GB < kubeadm minimum (1700MB).
+# M4 Mac'in dar RAM bütçesi için bilinçli tercih; production'da master >= 2GB olmalı.
+- name: kubeadm init (custom subnet + Mem bypass)
   command: >
-    kubeadm init --config=/tmp/kubeadm-config.yaml --upload-certs
+    kubeadm init
+    --apiserver-advertise-address={{ api_server_address }}
+    --pod-network-cidr={{ pod_cidr }}
+    --service-cidr={{ service_cidr }}
+    --kubernetes-version={{ kubernetes_version }}
+    --node-name=master
     --ignore-preflight-errors=Mem
-  when: not kubeconfig_exists.stat.exists
-  register: kubeadm_output
+  when: not kubeadm_conf.stat.exists
+  register: kubeadm_init
 
-- name: .kube dizini
+- name: node_user için .kube dizini
   file:
-    path: "{{ ansible_env.HOME }}/.kube"
+    path: "/home/{{ node_user }}/.kube"
     state: directory
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
+    mode: '0755'
 
-- name: admin.conf kopyala
+- name: admin.conf'u node_user'a kopyala
   copy:
     src: /etc/kubernetes/admin.conf
-    dest: "{{ ansible_env.HOME }}/.kube/config"
+    dest: "/home/{{ node_user }}/.kube/config"
     remote_src: true
-    owner: "{{ ansible_user_id }}"
+    owner: "{{ node_user }}"
+    group: "{{ node_user }}"
     mode: '0600'
 
 - name: Calico CNI kur
-  command: kubectl apply -f https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
+  become: false
+  command: >
+    kubectl apply -f
+    https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml
   environment:
-    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
-  when: not kubeconfig_exists.stat.exists
+    KUBECONFIG: "/home/{{ node_user }}/.kube/config"
+
+- name: Master node Ready olana kadar bekle
+  become: false
+  command: kubectl wait node master --for=condition=Ready --timeout=300s
+  environment:
+    KUBECONFIG: "/home/{{ node_user }}/.kube/config"
 
 - name: Join command al
   command: kubeadm token create --print-join-command
   register: join_command
-  changed_when: false
 
-# Join command'a Mem bypass ekle (worker'lar 700MB) → dosyaya yaz
-- name: Join command'ı dosyaya yaz
+# Worker'lar da 700MB RAM ile düşük → join'de de Mem preflight'ı bypass et
+- name: Join command'ı dosyaya yaz (Mem bypass ile)
   copy:
     content: "{{ join_command.stdout }} --ignore-preflight-errors=Mem"
-    dest: /tmp/join-command.sh
+    dest: /tmp/kubeadm-join.sh
     mode: '0755'
+
+# Önemli: fetch dosyayı master'dan KONTROL MAKİNESİNE (Mac) /tmp'ye indirir.
+# Worker rolü sonra bu dosyayı kontrol makinesinden worker'a kopyalar.
+- name: Join command'ı kontrol makinesine indir
+  fetch:
+    src: /tmp/kubeadm-join.sh
+    dest: /tmp/kubeadm-join.sh
+    flat: true
 ```
 
-`ansible/roles/master/templates/kubeadm-config.yaml.j2`:
-```yaml
-apiVersion: kubeadm.k8s.io/v1beta4
-kind: ClusterConfiguration
-kubernetesVersion: "v{{ kubernetes_version }}.0"
-controlPlaneEndpoint: "{{ api_server_endpoint }}"
-networking:
-  podSubnet: "{{ pod_cidr }}"        # Custom subnet — case study 1.3b
-  serviceSubnet: "{{ service_cidr }}"
----
-apiVersion: kubelet.config.k8s.io/v1beta1
-kind: KubeletConfiguration
-cgroupDriver: systemd                 # containerd SystemdCgroup ile eşleşmeli
-```
+> ℹ️ **`kubeadm-config.yaml.j2` template'ine gerek yok** — CLI args yaklaşımıyla bütün
+> parametreler `kubeadm init` flag'lerinden veriliyor. (Eski rehberlerde gördüğün template
+> yöntemi de geçerli ama burada daha sade ve hatasız olanı seçtik.)
 
 `ansible/roles/worker/tasks/main.yml`:
+
+> ℹ️ Join akışı: **master** join komutunu üretir → fetch ile **Mac'in `/tmp`'sine** iner →
+> **worker** rolü bu dosyayı Mac'ten worker'a `copy` eder → worker çalıştırır. Böylece dosya
+> doğru yerde (worker'da) olur.
+
 ```yaml
 ---
-- name: Join command'ı master'dan çek
-  fetch:
-    src: /tmp/join-command.sh
-    dest: /tmp/join-command.sh
-    flat: true
-  delegate_to: "{{ groups['master'][0] }}"
+- name: Node zaten katılmış mı?
+  stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: kubelet_conf
+
+- name: Join command'ı master'dan worker'a kopyala
+  copy:
+    src: /tmp/kubeadm-join.sh          # kontrol makinesindeki (Mac) dosya
+    dest: /tmp/kubeadm-join.sh
+    mode: '0755'
+  when: not kubelet_conf.stat.exists
 
 - name: Cluster'a worker olarak katıl
-  command: bash /tmp/join-command.sh
-  args:
-    creates: /etc/kubernetes/kubelet.conf
+  command: bash /tmp/kubeadm-join.sh
+  when: not kubelet_conf.stat.exists
+
+- name: Worker node'u etiketle
+  delegate_to: master
+  become: false
+  command: "kubectl label node {{ inventory_hostname }} node-role.kubernetes.io/worker=worker --overwrite"
+  environment:
+    KUBECONFIG: "/home/{{ node_user }}/.kube/config"
+  ignore_errors: true
 ```
 
 #### Cluster'ı Kur (Faz 1 başlar)
@@ -1203,6 +1346,44 @@ helm install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
   -n monitoring -f kubernetes/monitoring/kube-prometheus-stack-values.yaml --wait --timeout 10m
 ```
 
+#### Uygulama Metriklerini Prometheus'a Tanıt (ServiceMonitor)
+
+> ⚠️ **Bu adım atlanırsa app dashboard'u (1.6a) boş kalır.** Prometheus **Operator**, pod'daki
+> `prometheus.io/scrape` annotation'larını **otomatik okumaz** (o, Operator'sız klasik Prometheus
+> özelliği). Operator yalnızca `ServiceMonitor`/`PodMonitor` CRD'lerini izler. Bu yüzden uygulamanın
+> `/actuator/prometheus` endpoint'ini scrape etmesi için bir ServiceMonitor tanımlamak **zorunlu**.
+> (CRD'ler kube-prometheus-stack ile geldiği için bu dosya stack kurulduktan **sonra** uygulanır.)
+
+`kubernetes/monitoring/app-servicemonitor.yaml`:
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: query-param-app
+  namespace: monitoring          # Prometheus bu namespace'te ServiceMonitor arar
+  labels:
+    release: kube-prometheus-stack   # stack'in ServiceMonitor selector'ı bu label'ı bekler
+spec:
+  namespaceSelector:
+    matchNames: [app]            # app namespace'indeki Service'leri tara
+  selector:
+    matchLabels:
+      app: query-param-app       # Service'in label'ı (service.yaml ile eşleşir)
+  endpoints:
+    - port: management           # service.yaml'daki 9090 port adı
+      path: /actuator/prometheus
+      interval: 15s
+```
+
+> ℹ️ `service.yaml`'a (Step 2.1) Service'in `metadata.labels`'ına `app: query-param-app` eklediğinden
+> emin ol — ServiceMonitor selector'ı buna bağlanır. (Aşağıdaki service.yaml'da hazır.)
+
+```bash
+kubectl apply -f kubernetes/monitoring/app-servicemonitor.yaml
+# Doğrula: Prometheus targets'ta query-param-app "UP" görünmeli
+# http://monitoring.example.com/prometheus/targets
+```
+
 #### 1.6c: Tek Hostname — Çoklu Path Ingress
 
 `kubernetes/monitoring/ingress-monitoring.yaml`:
@@ -1543,6 +1724,8 @@ Docker Desktop'sız master VM'inde nerdctl ile):
 cd app && mvn clean package -DskipTests && cd ..
 multipass transfer -r app master:/home/ubuntu/app
 multipass exec master -- sudo nerdctl --namespace k8s.io build -t dreamgames/query-param-app:1.1.0 /home/ubuntu/app
+# ⚠️ Yeni tag → worker'lara da dağıt (Step 1.2'deki distribute_image fonksiyonu):
+distribute_image dreamgames/query-param-app:1.1.0
 ```
 
 📖 Logback AsyncAppender: https://logback.qos.ch/manual/appenders.html#AsyncAppender
@@ -1694,11 +1877,13 @@ kind: Service
 metadata:
   name: query-param-app
   namespace: app
+  labels:
+    app: query-param-app        # ServiceMonitor selector buna bağlanır (Step 1.6)
 spec:
   selector: { app: query-param-app }
   ports:
     - { name: http, port: 80, targetPort: 8080 }
-    - { name: management, port: 9090, targetPort: 9090 }
+    - { name: management, port: 9090, targetPort: 9090 }   # ServiceMonitor bu port adını kullanır
 ```
 
 `kubernetes/app/hpa.yaml`:
@@ -2165,9 +2350,25 @@ func main() {
 }
 ```
 
+`webhook/go.mod` — bağımlılıkları pinler (reproducible build). `go.sum`'ı aşağıdaki
+`go mod tidy` komutu otomatik üretir:
+```
+module github.com/dreamgames/k8s-resource-webhook
+
+go 1.22
+
+require (
+	github.com/prometheus/client_golang v1.18.0
+	k8s.io/api v0.28.4
+	k8s.io/apimachinery v0.28.4
+)
+```
+> ⚠️ `go.mod` içindeki `go 1.22` ile Dockerfile'daki `golang:1.22-alpine` **eşleşmeli**. Daha
+> düşük bir toolchain ile build edersen `go.mod requires go >= 1.22` hatası alırsın.
+
 `webhook/Dockerfile`:
 ```dockerfile
-FROM golang:1.21-alpine AS builder
+FROM golang:1.22-alpine AS builder
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -2182,11 +2383,15 @@ ENTRYPOINT ["/webhook"]
 ```
 
 ```bash
-cd webhook && go mod init webhook 2>/dev/null; go mod tidy
-go vet ./... && go build ./... && cd ..
+cd webhook
+go mod tidy                 # go.sum üretir (go.mod yukarıda hazır)
+go vet ./... && go build ./...
+cd ..
 # Imajı master VM'inde build et (Docker Desktop yok) → doğrudan cluster containerd'sine
 multipass transfer -r webhook master:/home/ubuntu/webhook
 multipass exec master -- sudo nerdctl --namespace k8s.io build -t dreamgames/resource-webhook:1.0.0 /home/ubuntu/webhook
+# ⚠️ Webhook pod'ları da worker'larda çalışır → dağıt (Step 1.2'deki distribute_image fonksiyonu):
+distribute_image dreamgames/resource-webhook:1.0.0
 ```
 
 #### Webhook ConfigMap (2.4a) + Deployment
